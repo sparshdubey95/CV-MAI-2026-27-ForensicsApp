@@ -3,13 +3,14 @@
 from .grayscale import GrayscaleTool
 from .image_info import ImageInfoTool
 from .registry import ToolRegistry
-
+from .blur import BlurTool
 
 def build_tool_registry() -> ToolRegistry:
     return ToolRegistry(
         [
             ImageInfoTool(),
             GrayscaleTool(),
+            BlurTool(),
         ]
     )
 
