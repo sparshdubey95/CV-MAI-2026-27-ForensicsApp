@@ -1,5 +1,7 @@
 """Draw RGB (or grayscale) histograms as an image shown in the preview."""
-
+# A histogram counts how many times each intensity appears.
+#the position in the list represents intensity.
+#The value stored there represents how many pixels have that intensity.
 from __future__ import annotations
 
 import tkinter as tk
@@ -9,25 +11,48 @@ from PIL import Image, ImageDraw
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
 
-PANEL_HEIGHT = 120
+PANEL_HEIGHT = 120 # Each histogram panel gets 120 pixels of vertical space.
+                    # For an RGB image, we have three panels
+                    # So you need three vertical areas.
 CHART_WIDTH = 640
-LEFT = 44
-RIGHT = 16
-TOP = 22
-BOTTOM = 18
+LEFT = 44 # Leaves 44 pixels on the left.
+RIGHT = 16 # Leaves 16 pixels on the right.
+TOP = 22  # Leaves 22 pixels at the top.
+BOTTOM = 18 # Leaves 18 pixels at the bottom.
 
-
+# This function receives one image channel.
+# It calculates four things: minimum intensity, maximum intensity, mean intensity, most common intensity
 def _band_stats(band: Image.Image) -> dict[str, float | int]:
-    histogram = band.histogram()[:256]  # band.histogram() counts the pixels.
+    histogram = band.histogram()[:256]  # band.histogram() counts the pixels. Takes the first 256 elements.
     total = band.width * band.height
     if total == 0:
         return {"min": 0, "max": 0, "mean": 0.0, "peak": 0}
     # Starting from intensity 0, what is the first intensity that actually appears in the image?
-    low = next((index for index, count in enumerate(histogram) if count), 0)
-    high = next((index for index in range(255, -1, -1) if histogram[index]), 0)
+    # we could just loop thru the histogram list but we need the index value as well
+    # thats why we use enumerate which gives us the index and count
+    # The index is the intensity. The count is the number of pixels.
+    low = 0
+    for index, count in enumerate(histogram):
+        if count > 0:
+            low = index
+            break
+
+    # It starts at the highest intensity (255) and moves backwards: It stops at the first intensity that has pixels.
+    high = 0
+    for index in range(255, -1, -1): # range(start, stop, step)
+        if histogram[index] > 0:
+            high = index
+            break
     # This calculates the total intensity.
-    weighted = sum(index * count for index, count in enumerate(histogram))
-    peak = max(range(256), key=lambda index: histogram[index]) # This asks which intensity has the most pixels?
+    weighted = 0
+    for index, count in enumerate(histogram):
+        weighted += index * count
+
+    peak = 0        # This asks which intensity has the most pixels?
+    for index in range(256):
+        if histogram[index] > histogram[peak]:
+            peak = index
+
     return {
         "min": low,
         "max": high,
@@ -75,8 +100,15 @@ def render_histogram(image: Image.Image) -> Image.Image:
 
     # enumerate() gives us the index as well as the item.
     # The index is important because we need to know where vertically to place each chart.
-    for index, (name, counts, colour) in enumerate(panels):
-        origin_y = 32 + index * (PANEL_HEIGHT + 12) # This determines the vertical position of each histogram.
+    for index, panel in enumerate(panels):
+        name = panel[0]
+        counts = panel[1]
+        colour = panel[2]
+        # Move each histogram below the previous one.
+        origin_y = 32 + index * (PANEL_HEIGHT + 12)
+
+        # IN PIL the coordinate system starts at the top left
+        #So y increases as we go down
         x0, y0 = LEFT, origin_y + TOP # This is the top-left corner of the actual plotting area.
         x1, y1 = LEFT + plot_width, origin_y + TOP + plot_height # This is the bottom-right corner.
 
@@ -85,19 +117,31 @@ def render_histogram(image: Image.Image) -> Image.Image:
         # Draw the channel name
         draw.text((8, origin_y + TOP), name, fill=colour)
         # counts contains the number of pixels at every intensity.
-        peak = max(counts) or 1 # Why or 1? It prevents a division-by-zero error.
+        # Find the largest number of pixels in any bin.
+        peak = max(counts)
+        if peak == 0: #It prevents a division-by-zero error.
+            peak = 1
 
-        # Loop through every histogram bin
-        # A histogram has 256 bins.
-        # Each bin represents an intensity
-        # bin_index tells us the intensity.
-        # count tells us how many pixels have that intensity.
-        for bin_index, count in enumerate(counts):
+        # Draw each intensity.
+        for intensity in range(256):
+            count = counts[intensity]
             if count == 0:
-                continue # Ignore empty bins
-            x = x0 + int(bin_index * plot_width / 255)
-            bar_height = int(count / peak * (plot_height - 1))
-            draw.line((x, y1, x, y1 - bar_height), fill=colour)
+                continue
+
+            # Convert the intensity (0–255) to an x position.
+            x = x0 + int(intensity * plot_width / 255)
+
+            # Calculate the height of the bar.
+            # peak - What is the largest pixel count in any intensity bin?
+            height = int(count / peak * (plot_height - 1))
+
+            # Draw the bar.
+            draw.line(
+                (x, y1, x, y1 - height),
+                fill=colour
+            )
+
+        # Draw the intensity labels.
         draw.text((x0, y1 + 2), "0", fill=(90, 90, 95))
         draw.text((x1 - 24, y1 + 2), "255", fill=(90, 90, 95))
     return canvas
