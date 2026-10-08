@@ -142,8 +142,8 @@ def render_histogram(image: Image.Image) -> Image.Image:
             )
 
         # Draw the intensity labels.
-        draw.text((x0, y1 + 2), "0", fill=(90, 90, 95))
-        draw.text((x1 - 24, y1 + 2), "255", fill=(90, 90, 95))
+        draw.text((x0, y1 + 2), "0", fill=(90, 90, 95)) # Draw 0
+        draw.text((x1 - 24, y1 + 2), "255", fill=(90, 90, 95)) # Draw 255
     return canvas
 
 
@@ -157,7 +157,10 @@ class HistogramTool(ForensicsTool):
         assert document.current is not None
         source = document.current
         chart = render_histogram(source)
-        details: dict[str, object] = {"Operation": "Histogram", "Source mode": source.mode}
+        details = {
+            "Operation": "Histogram",
+            "Source mode": source.mode
+        }
         if source.mode in {"L", "1"}:
             stats = _band_stats(source.convert("L"))
             details.update(
@@ -170,6 +173,7 @@ class HistogramTool(ForensicsTool):
             )
         else:
             red, green, blue = source.convert("RGB").split()
+            # For each channel name and its corresponding image band, calculate the statistics.
             for name, band in (("R", red), ("G", green), ("B", blue)):
                 stats = _band_stats(band)
                 details[f"{name} min–max"] = f"{stats['min']}–{stats['max']}"

@@ -1,9 +1,8 @@
-"""Stretch intensities so a chosen percentile range fills 0–255."""
+"""Stretch the minimum and maximum intensities to 0 and 255."""
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import simpledialog
 
 from PIL import Image
 
@@ -11,103 +10,105 @@ from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
 
 
-def intensity_at_percentile(histogram: list[int], percentile: float) -> int:
-    """Map a percentile in [0, 100] to a gray value using the 256-bin histogram."""
-    total = sum(histogram)
-    if total == 0:
-        return 0
-    if percentile <= 0:
-        for index, count in enumerate(histogram):
-            if count:
-                return index
-        return 0
-    if percentile >= 100:
-        for index in range(len(histogram) - 1, -1, -1):
-            if histogram[index]:
-                return index
-        return 255
-    target = total * (percentile / 100.0)
-    accumulated = 0
-    for index, count in enumerate(histogram):
-        accumulated += count
-        if accumulated >= target:
-            return index
-    return 255
+def stretch_band(band: Image.Image) -> tuple[Image.Image, int, int]:
+    """Stretch one image band using its minimum and maximum values."""
+
+    # Find the darkest and brightest pixel in this band.
+    minimum, maximum = band.getextrema()
+
+    # If all pixels have the same value, there is nothing to stretch.
+    if minimum == maximum:
+        return band.copy(), minimum, maximum
+
+    # Create a lookup table for all possible pixel values.
+    lookup = []
+    # We create a conversion table that tells the computer what every old pixel value should become.
+    # Then we apply that table to the image.
+    for value in range(256):
+        # Move the minimum value to 0.
+        new_value = value - minimum
+
+        # Stretch the value to the range 0–255.This is the actual stretching.
+        new_value = new_value * 255 / (maximum - minimum)
+
+        # Convert the result to an integer.
+        new_value = int(new_value)
+
+        # If the answer goes outside the valid pixel range, bring it back.
+        new_value = max(0, min(255, new_value))
+
+        lookup.append(new_value)
+
+    # Apply the new values to the image.
+    stretched = band.point(lookup)
+
+    return stretched, minimum, maximum
 
 
-def stretch_band(band: Image.Image, low_percentile: float, high_percentile: float) -> tuple[Image.Image, int, int]:
-    histogram = band.histogram()[:256]
-    low = intensity_at_percentile(histogram, low_percentile)
-    high = intensity_at_percentile(histogram, high_percentile)
-    if high <= low:
-        return band.copy(), low, high
-    scale = 255.0 / (high - low)
-    lookup = [max(0, min(255, int((value - low) * scale + 0.5))) for value in range(256)]
-    return band.point(lookup), low, high
-
-
-def stretch_contrast(
-    image: Image.Image,
-    low_percentile: float = 0.0,
-    high_percentile: float = 100.0,
-) -> tuple[Image.Image, dict[str, str]]:
-    """Stretch each RGB band (or a grayscale image) independently."""
-    if not 0 <= low_percentile < high_percentile <= 100:
-        raise ValueError("Need 0 ≤ low < high ≤ 100")
+# stretch_band() works on one channel.
+# stretch_contrast() works on the whole image.
+def stretch_contrast(image: Image.Image,) -> tuple[Image.Image, dict[str, str]]:
+    """Apply min–max contrast stretching."""
 
     notes: dict[str, str] = {}
+
+    # If the image is grayscale, stretch it directly.
     if image.mode in {"L", "1"}:
-        stretched, low, high = stretch_band(image.convert("L"), low_percentile, high_percentile)
-        notes["L in"] = f"{low}–{high}"
+        stretched, minimum, maximum = stretch_band(image)
+
+        #the original minimum and maximum
+        notes["L in"] = f"{minimum}–{maximum}"
         return stretched, notes
 
+    # If the image is RGB, separate it into red, green and blue.
     red, green, blue = image.convert("RGB").split()
-    parts = []
-    for name, band in (("R", red), ("G", green), ("B", blue)):
-        stretched, low, high = stretch_band(band, low_percentile, high_percentile)
-        parts.append(stretched)
-        notes[f"{name} in"] = f"{low}–{high}"
-    return Image.merge("RGB", tuple(parts)), notes
+
+    stretched_bands = []
+
+    for name, band in (
+        # First iteration-- name = "R" , band = red
+        ("R", red),
+        # Second iteration -- name = "G", band = green
+        ("G", green),
+        # and so on
+        ("B", blue),
+    ):
+        stretched, minimum, maximum = stretch_band(band)
+
+        stretched_bands.append(stretched)
+        notes[f"{name} in"] = f"{minimum}–{maximum}"
+
+    # Put the three stretched channels back together.
+    output = Image.merge("RGB", tuple(stretched_bands)) # Pillow's Image.merge() expects the channels as a tuple.
+
+    return output, notes
 
 
 class ContrastStretchTool(ForensicsTool):
     tool_id = "contrast_stretch"
     title = "Contrast stretching"
     category = "Set 2"
-    description = "Remap a percentile intensity range to the full 0–255 display range."
+    description = "Stretch the minimum and maximum intensity to 0–255."
 
-    def run(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:
-        low = simpledialog.askfloat(
-            "Contrast stretching",
-            "Low percentile (0 = actual minimum):",
-            parent=parent,
-            minvalue=0.0,
-            maxvalue=99.9,
-            initialvalue=0.0,
-        )
-        if low is None:
-            return None
-        high = simpledialog.askfloat(
-            "Contrast stretching",
-            "High percentile (100 = actual maximum):",
-            parent=parent,
-            minvalue=low + 0.1,
-            maxvalue=100.0,
-            initialvalue=100.0,
-        )
-        if high is None:
-            return None
+    def run(
+        self,
+        parent: tk.Misc,
+        document: ImageDocument,
+    ) -> ToolResult | None:
 
         assert document.current is not None
-        output, notes = stretch_contrast(document.current, low, high)
+
+        # Apply min–max contrast stretching.
+        output, notes = stretch_contrast(document.current)
+
         details: dict[str, object] = {
             "Operation": "Contrast stretching",
-            "Low percentile": low,
-            "High percentile": high,
         }
+
         details.update(notes)
+
         return ToolResult(
             image=output,
-            message=f"Stretched contrast using percentiles {low:g}–{high:g}.",
+            message="Stretched contrast using the minimum and maximum intensities.",
             details=details,
         )
