@@ -36,16 +36,16 @@ def to_rgb(image: Image.Image) -> Image.Image: # Make sure the image is in RGB f
 
 
 def channel_plane(image: Image.Image, channel: str) -> Image.Image:
-    """Keep one channel and set the other two to zero (a colour plane)."""
-    red, green, blue = to_rgb(image).split() # Pillow's split() separates an image into its individual channels.
-    empty = Image.new("L", red.size, 0)
-    #Image.merge() combines three single-channel images into one RGB image.
+    """Return one colour channel as a grayscale image."""
+    red, green, blue = to_rgb(image).split()
+
     if channel == "R":
-        return Image.merge("RGB", (red, empty, empty)) # Keep one colour channel while setting the other two channels to zero.
+        return red
     if channel == "G":
-        return Image.merge("RGB", (empty, green, empty))# Keep one colour channel while setting the other two channels to zero.
+        return green
     if channel == "B":
-        return Image.merge("RGB", (empty, empty, blue))# Keep one colour channel while setting the other two channels to zero.
+        return blue
+
     raise ValueError(f"Unknown channel: {channel}")
 
 
@@ -60,7 +60,7 @@ def split_all_planes(image: Image.Image, gap: int = 8) -> Image.Image: # This fu
     height = planes[0].height
 
     # This creates a new empty image that will be used to put the three planes side by side.
-    canvas = Image.new("RGB", (width * 3 + gap * 2, height), (32, 32, 36))
+    canvas = Image.new("L", (width * 3 + gap * 2, height), 0)
     canvas.paste(planes[0], (0, 0))
     canvas.paste(planes[1], (width + gap, 0))
     canvas.paste(planes[2], (2 * (width + gap), 0))
