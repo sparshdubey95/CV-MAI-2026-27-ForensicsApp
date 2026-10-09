@@ -3,7 +3,27 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, messagebox, ttk
+
+IMAGE_FILETYPES = [
+    ("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp"),
+    ("All files", "*.*"),
+]
+
+
+def ask_image_file(parent: tk.Misc, title: str = "Select image") -> str | None:
+    """Ask the user to select an image file; return the path or None if cancelled."""
+    filename = filedialog.askopenfilename(
+        parent=parent,
+        title=title,
+        filetypes=IMAGE_FILETYPES,
+    )
+    return filename or None
+
+
+def show_error(parent: tk.Misc, title: str, message: str) -> None:
+    """Display an error message dialog to the user."""
+    messagebox.showerror(title, message, parent=parent)
 
 
 def ask_choice(
