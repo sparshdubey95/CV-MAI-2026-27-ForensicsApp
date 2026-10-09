@@ -1,145 +1,245 @@
-"""Build a threshold mask and optionally apply it to the colour image."""
-# A mask is basically a map that says: Keep this pixel or remove this pixel.
+"""Binary masking and jacket texture replacement tools."""
+
 from __future__ import annotations
 
+from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, ttk
 
 from PIL import Image, ImageOps
 
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
+from .dialogs import ask_choice, ask_image_file, show_error
 
 
 def to_rgb(image: Image.Image) -> Image.Image:
+    """Ensure the image is in RGB format."""
     if image.mode == "RGB":
         return image
-    else:
-        return image.convert("RGB")
+    return image.convert("RGB")
 
 
-# main image-processing function.
-def threshold_mask(image: Image.Image, threshold: int, keep: str) -> Image.Image:
-    """Return an L-mode mask: 255 for kept pixels, 0 for the rest.
+def create_jacket_mask(jacket_image: Image.Image, threshold: int = 1) -> Image.Image:
+    """Create an 8-bit binary mask (mode 'L') from the jacket image. """
+    gray = ImageOps.grayscale(to_rgb(jacket_image))
+    lookup = []
+    for value in range(256):
+        if value >= threshold:
+            lookup.append(255)
+        else:
+            lookup.append(0)
+    return gray.point(lookup)
 
-    ``keep`` is ``"above"`` (intensity >= threshold) or ``"below"`` (<=).
+
+def composite_jacket(base_image: Image.Image, jacket_image: Image.Image, mask: Image.Image) -> Image.Image:
+    """Composite the jacket onto the base model image using a binary mask.
+
+    Where mask is 255 (jacket area), pixels are taken from jacket_image.
+    Where mask is 0 (outside jacket), pixels are preserved from base_image.
     """
-
-    # A grayscale pixel is represented by a value from 0 to 255. Reject thresholds outside this range.
-    if not 0 <= threshold <= 255:
-        raise ValueError("threshold must be between 0 and 255")
-    gray = ImageOps.grayscale(image)
-    if keep == "above":
-        lookup = [255 if value >= threshold else 0 for value in range(256)]
-        return gray.point(lookup)
-    if keep == "below":
-        lookup = [255 if value <= threshold else 0 for value in range(256)]
-        return gray.point(lookup)
-    raise ValueError(f"keep must be 'above' or 'below', got {keep!r}")
+    if jacket_image.size != base_image.size or mask.size != base_image.size:
+        raise ValueError("Image dimensions must match for compositing.")
+    # Image.composite(image1, image2, mask) , the order matters here img1 is the white pixel, img2 is
+    return Image.composite(to_rgb(jacket_image), to_rgb(base_image), mask.convert("L"))
 
 
-def apply_mask(image: Image.Image, mask: Image.Image) -> Image.Image:
-    """Keep original colour where the mask is white; black elsewhere."""
-    rgb = to_rgb(image)
-    background = Image.new("RGB", rgb.size, (0, 0, 0))
-    return Image.composite(rgb, background, mask.convert("L"))
+def apply_texture(base_image: Image.Image, texture_image: Image.Image, mask: Image.Image) -> Image.Image:
+    """Composite a texture into the jacket region defined by the binary mask.
+
+    Where mask is 255 (jacket area), pixels are replaced by texture_image.
+    Where mask is 0 (outside jacket), pixels are preserved from base_image.
+    """
+    if texture_image.size != base_image.size or mask.size != base_image.size:
+        raise ValueError("Image dimensions must match for compositing.")
+    return Image.composite(to_rgb(texture_image), to_rgb(base_image), mask.convert("L"))
 
 
-def _ask_mask_options(parent: tk.Misc) -> tuple[int, str, str] | None:
-    chosen: dict[str, object] = {"ok": False}
-    window = tk.Toplevel(parent)
-    window.title("Masking")
-    window.transient(parent)
-    window.resizable(False, False)
-
-    frame = ttk.Frame(window, padding=12)
-    frame.pack(fill="both", expand=True)
-
-    ttk.Label(frame, text="Threshold (0–255) on the grayscale version of the image:").pack(
-        anchor="w"
-    )
-    threshold_var = tk.StringVar(value="128")
-    ttk.Entry(frame, textvariable=threshold_var, width=8).pack(anchor="w", pady=(4, 10))
-
-    ttk.Label(frame, text="Keep pixels that are:").pack(anchor="w")
-    keep_var = tk.StringVar(value="above")
-    ttk.Radiobutton(frame, text="At or above the threshold (brighter)", variable=keep_var, value="above").pack(
-        anchor="w"
-    )
-    ttk.Radiobutton(frame, text="At or below the threshold (darker)", variable=keep_var, value="below").pack(
-        anchor="w"
-    )
-
-    ttk.Label(frame, text="Output:").pack(anchor="w", pady=(10, 0))
-    output_var = tk.StringVar(value="masked")
-    ttk.Radiobutton(frame, text="Masked colour image (background black)", variable=output_var, value="masked").pack(
-        anchor="w"
-    )
-    ttk.Radiobutton(frame, text="Binary mask only (white = kept)", variable=output_var, value="mask").pack(
-        anchor="w"
-    )
-
-    def confirm() -> None:
-        raw = threshold_var.get().strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            messagebox.showerror("Masking", "Threshold must be a whole number.", parent=window)
-            return
-        if not 0 <= value <= 255:
-            messagebox.showerror("Masking", "Threshold must be between 0 and 255.", parent=window)
-            return
-        chosen["ok"] = True
-        chosen["threshold"] = value
-        chosen["keep"] = keep_var.get()
-        chosen["output"] = output_var.get()
-        window.destroy()
-
-    def cancel() -> None:
-        window.destroy()
-
-    buttons = ttk.Frame(frame)
-    buttons.pack(fill="x", pady=(12, 0))
-    ttk.Button(buttons, text="OK", command=confirm).pack(side="right")
-    ttk.Button(buttons, text="Cancel", command=cancel).pack(side="right", padx=(0, 6))
-    window.protocol("WM_DELETE_WINDOW", cancel)
-    window.grab_set()
-    window.wait_window()
-    if not chosen["ok"]:
-        return None
-    return int(chosen["threshold"]), str(chosen["keep"]), str(chosen["output"])
+MASKING_CHOICES = [
+    ("jacket", "Put jacket on model"),
+    ("texture", "Apply texture to jacket"),
+]
 
 
 class MaskingTool(ForensicsTool):
     tool_id = "masking"
     title = "Masking"
     category = "Set 2"
-    description = "Build a brightness threshold mask and optionally apply it."
+    description = "Put jacket on model or apply textures using binary masking."
+
+    def __init__(self) -> None:
+        self._jacket_mask: Image.Image | None = None
+        self._base_image: Image.Image | None = None
+        self._jacket_result: Image.Image | None = None
+        self._texture_results: list[Image.Image] = []
+
+    def reset_state(self) -> None:
+        """Reset internal jacket mask and operation state."""
+        self._jacket_mask = None
+        self._base_image = None
+        self._jacket_result = None
+        self._texture_results.clear()
+
+    def is_jacket_applied(self, document: ImageDocument) -> bool:
+        """Verify whether the jacket has been applied and document.current is in a valid state."""
+        if self._jacket_mask is None or self._base_image is None or document.current is None:
+            return False
+        if document.current.size != self._jacket_mask.size:
+            return False
+        # Valid state if document.current matches the jacket result or a subsequent texture result
+        if self._jacket_result is not None and document.current == self._jacket_result:
+            return True
+        return any(document.current == res for res in self._texture_results)
 
     def run(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:
-        options = _ask_mask_options(parent)
-        if options is None:
+        if document.current is None:
+            show_error(parent, "Masking", "No base image is loaded. Open an image first.")
             return None
-        threshold, keep, output_kind = options
 
+        choice = ask_choice(
+            parent,
+            title="Masking",
+            prompt="Select a masking operation:",
+            options=MASKING_CHOICES,
+            initial="jacket",
+        )
+        if choice is None:
+            return None
+
+        if choice == "jacket":
+            return self._run_put_jacket(parent, document)
+        if choice == "texture":
+            return self._run_apply_texture(parent, document)
+        return None
+
+    def _run_put_jacket(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:
         assert document.current is not None
-        mask = threshold_mask(document.current, threshold, keep)
-        if output_kind == "mask":
-            result_image = mask
-            message = "Computed a binary threshold mask."
-        else:
-            result_image = apply_mask(document.current, mask)
-            message = "Applied the threshold mask to the image."
-        kept_pixels = mask.histogram()[255]
-        total = mask.width * mask.height
+
+        # 1. Ask the user to select the jacket image
+        file_path = ask_image_file(parent, title="Select jacket image")
+        if file_path is None:
+            return None  # Harmless cancellation
+
+        # 2. Validate that the image can be opened
+        try:
+            with Image.open(file_path) as loaded:
+                jacket_image = loaded.convert("RGB")
+        except Exception as error:
+            show_error(parent, "Masking", f"Could not open jacket image: {error}")
+            return None
+
+        # 3. Check compatible dimensions
+        if jacket_image.size != document.current.size:
+            show_error(
+                parent,
+                "Masking",
+                f"Jacket dimensions ({jacket_image.width} × {jacket_image.height}) "
+                f"do not match the base image ({document.current.width} × {document.current.height}).",
+            )
+            return None
+
+        # 4. Create binary mask from the jacket image
+        mask = create_jacket_mask(jacket_image)
+
+        # 5. Composite jacket onto model image
+        result_image = composite_jacket(document.current, jacket_image, mask)
+
+        # Update state for texture operations
+        self._jacket_mask = mask.copy()
+        self._base_image = document.current.copy()
+        self._jacket_result = result_image.copy()
+        self._texture_results.clear()
+
+        # 6. Return result through ToolResult
+        jacket_pixels = mask.histogram()[255]
+        total_pixels = mask.width * mask.height
         return ToolResult(
             image=result_image,
-            message=message,
+            message="Put jacket on model successfully.",
             details={
-                "Operation": "Masking",
-                "Threshold": threshold,
-                "Keep": "≥ threshold" if keep == "above" else "≤ threshold",
-                "Output": "binary mask" if output_kind == "mask" else "masked image",
-                "Kept pixels": f"{kept_pixels} / {total}",
+                "Operation": "Put jacket on model",
+                "Jacket file": Path(file_path).name,
+                "Dimensions": f"{jacket_image.width} × {jacket_image.height}",
+                "Jacket coverage": f"{jacket_pixels} / {total_pixels} pixels",
             },
         )
+
+
+    def _run_apply_texture(
+            self,
+            parent: tk.Misc,
+            document: ImageDocument,
+    ) -> ToolResult | None:
+        assert document.current is not None
+
+        # 1. Verify that the jacket has already been applied successfully
+        if not self.is_jacket_applied(document):
+            show_error(
+                parent,
+                "Masking",
+                "Please put the jacket on the model before applying a texture.",
+            )
+            return None
+
+        # 2. Ask the user to select a texture image
+        file_path = ask_image_file(parent, title="Select texture image")
+        if file_path is None:
+            return None
+
+        # 3. Open the texture image
+        try:
+            with Image.open(file_path) as loaded:
+                texture_image = loaded.convert("RGB")
+        except Exception as error:
+            show_error(
+                parent,
+                "Masking",
+                f"Could not open texture image: {error}",
+            )
+            return None
+
+        # 4. Resize the texture to match the base image
+        original_size = texture_image.size
+        target_size = self._base_image.size if self._base_image else document.current.size
+
+        if texture_image.size != target_size:
+            texture_image = texture_image.resize(
+                target_size,
+                Image.Resampling.LANCZOS,
+            )
+
+        # 5. Reuse the original jacket mask
+        assert self._jacket_mask is not None
+        assert self._base_image is not None
+
+        # 6. Apply the texture only to the jacket area
+        result_image = apply_texture(
+            self._base_image,
+            texture_image,
+            self._jacket_mask,
+        )
+
+        # 7. Record this result for future texture operations
+        self._texture_results.append(result_image.copy())
+
+        # 8. Calculate jacket coverage
+        texture_pixels = self._jacket_mask.histogram()[255]
+        total_pixels = self._jacket_mask.width * self._jacket_mask.height
+
+        return ToolResult(
+            image=result_image,
+            message="Applied texture to jacket successfully.",
+            details={
+                "Operation": "Apply texture to jacket",
+                "Texture file": Path(file_path).name,
+                "Original texture dimensions": (
+                    f"{original_size[0]} × {original_size[1]}"
+                ),
+                "Final texture dimensions": (
+                    f"{texture_image.width} × {texture_image.height}"
+                ),
+                "Textured area": f"{texture_pixels} / {total_pixels} pixels",
+            },
+        )
+
+
+
