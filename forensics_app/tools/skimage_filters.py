@@ -23,7 +23,8 @@ def to_float_array(image: Image.Image) -> tuple[np.ndarray, bool]:
 
 
 def to_grayscale_float(image: Image.Image) -> np.ndarray:
-    """Convert PIL image to 2D float grayscale array in [0.0, 1.0]."""
+    """Convert PIL image to 2D float grayscale array in [0.0, 1.0].
+    because edge-detection algorithms work best on single-channel intensity data"""
     gray_image = image.convert("L")
     return np.asarray(gray_image).astype(np.float64) / 255.0
 
@@ -44,6 +45,8 @@ def apply_gaussian(image: Image.Image, sigma: float = 2.0) -> Image.Image:
     return from_float_array(filtered)
 
 
+# Median filters are fantastic for removing "salt-and-pepper" noise (random noisy specs on an image)
+# without completely blurring out sharp edges.
 def apply_median(image: Image.Image, radius: int = 2) -> Image.Image:
     """Apply skimage.filters.median with configurable disk footprint radius."""
     if radius < 1:
@@ -63,7 +66,8 @@ def apply_median(image: Image.Image, radius: int = 2) -> Image.Image:
 
     return from_float_array(filtered)
 
-
+# Sobel & prewitt are classic edge detectors. They calculate gradients (changes in pixel brightness)
+# to find outlines and borders in an image, converting the result to a clean normalized range between 0 and 1.
 def apply_sobel(image: Image.Image) -> Image.Image:
     """Apply skimage.filters.sobel edge detector."""
     gray = to_grayscale_float(image)
