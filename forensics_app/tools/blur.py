@@ -10,7 +10,7 @@ from .base import ForensicsTool, ToolResult
 class BlurTool(ForensicsTool):
     tool_id = "gaussian_blur"       # unique, stable identifier
     title = "Gaussian blur"         # text shown in the sidebar
-    category = "Filtering"
+    category = "Set 2"
     description = "Blur the working image with a chosen radius."
 
     def run(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:

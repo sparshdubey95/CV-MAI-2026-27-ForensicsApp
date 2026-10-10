@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 IMAGE_FILETYPES = [
     ("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp"),
@@ -68,3 +68,37 @@ def ask_choice(
     window.grab_set()
     window.wait_window()
     return chosen["value"]
+
+
+def ask_float(
+    parent: tk.Misc,
+    title: str,
+    prompt: str,
+    initial: float = 1.0,
+    min_val: float | None = None,
+    max_val: float | None = None,
+) -> float | None:
+    """Ask for a floating point number; return None if cancelled."""
+    kwargs: dict[str, object] = {"parent": parent, "initialvalue": initial}
+    if min_val is not None:
+        kwargs["minvalue"] = min_val
+    if max_val is not None:
+        kwargs["maxvalue"] = max_val
+    return simpledialog.askfloat(title, prompt, **kwargs)
+
+
+def ask_int(
+    parent: tk.Misc,
+    title: str,
+    prompt: str,
+    initial: int = 3,
+    min_val: int | None = None,
+    max_val: int | None = None,
+) -> int | None:
+    """Ask for an integer number; return None if cancelled."""
+    kwargs: dict[str, object] = {"parent": parent, "initialvalue": initial}
+    if min_val is not None:
+        kwargs["minvalue"] = min_val
+    if max_val is not None:
+        kwargs["maxvalue"] = max_val
+    return simpledialog.askinteger(title, prompt, **kwargs)
