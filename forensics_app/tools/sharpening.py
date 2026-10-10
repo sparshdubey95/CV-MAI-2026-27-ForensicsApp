@@ -34,15 +34,17 @@ def apply_unsharp_mask(
         raise ValueError(f"Amount must be positive, got {amount}.")
 
     is_rgb = image.mode != "L"
+    # Converts the image into a floating-point NumPy array scaled between 0.0 and 1.0
     if is_rgb:
         img_arr = np.asarray(image.convert("RGB")).astype(np.float64) / 255.0
+        # channel_axis=-1 is a parameter that tells the filter function which dimension of your image array represents the color channels
         blurred = skimage.filters.gaussian(img_arr, sigma=radius, channel_axis=-1)
     else:
         img_arr = np.asarray(image).astype(np.float64) / 255.0
         blurred = skimage.filters.gaussian(img_arr, sigma=radius)
 
-    mask = img_arr - blurred
-    sharpened = img_arr + amount * mask
+    mask = img_arr - blurred # Isolates the high-frequency edges.
+    sharpened = img_arr + amount * mask # Adds the details back
     clipped = np.clip(sharpened, 0.0, 1.0)
     uint8_arr = (clipped * 255.0).round().astype(np.uint8)
     return Image.fromarray(uint8_arr)

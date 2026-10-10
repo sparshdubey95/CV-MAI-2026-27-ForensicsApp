@@ -63,6 +63,7 @@ class CannyEdgeTool(ForensicsTool):
         assert document.current is not None
 
         # --- configurable sigma ---
+        # (higher sigma = fewer details, smoother edges).
         sigma = ask_float(
             parent,
             "Canny Edge Detection",
