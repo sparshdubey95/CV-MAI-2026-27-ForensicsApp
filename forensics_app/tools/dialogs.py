@@ -27,7 +27,7 @@ def show_error(parent: tk.Misc, title: str, message: str) -> None:
 
 
 def ask_choice(
-    parent: tk.Misc,
+    parent: tk.Misc | None,
     title: str,
     prompt: str,
     options: list[tuple[str, str]],
@@ -37,6 +37,10 @@ def ask_choice(
 
     ``options`` is a list of ``(value, label)`` pairs.
     """
+    default = initial if initial is not None else options[0][0]
+    if parent is None:
+        return default
+
     chosen: dict[str, str | None] = {"value": None}
     window = tk.Toplevel(parent)
     window.title(title)
@@ -47,7 +51,6 @@ def ask_choice(
     frame.pack(fill="both", expand=True)
     ttk.Label(frame, text=prompt, wraplength=320).pack(anchor="w", pady=(0, 8))
 
-    default = initial if initial is not None else options[0][0]
     variable = tk.StringVar(value=default)
     for value, label in options:
         ttk.Radiobutton(frame, text=label, variable=variable, value=value).pack(anchor="w")
@@ -71,7 +74,7 @@ def ask_choice(
 
 
 def ask_float(
-    parent: tk.Misc,
+    parent: tk.Misc | None,
     title: str,
     prompt: str,
     initial: float = 1.0,
@@ -79,6 +82,8 @@ def ask_float(
     max_val: float | None = None,
 ) -> float | None:
     """Ask for a floating point number; return None if cancelled."""
+    if parent is None:
+        return initial
     kwargs: dict[str, object] = {"parent": parent, "initialvalue": initial}
     if min_val is not None:
         kwargs["minvalue"] = min_val
@@ -88,7 +93,7 @@ def ask_float(
 
 
 def ask_int(
-    parent: tk.Misc,
+    parent: tk.Misc | None,
     title: str,
     prompt: str,
     initial: int = 3,
@@ -96,9 +101,56 @@ def ask_int(
     max_val: int | None = None,
 ) -> int | None:
     """Ask for an integer number; return None if cancelled."""
+    if parent is None:
+        return initial
     kwargs: dict[str, object] = {"parent": parent, "initialvalue": initial}
     if min_val is not None:
         kwargs["minvalue"] = min_val
     if max_val is not None:
         kwargs["maxvalue"] = max_val
     return simpledialog.askinteger(title, prompt, **kwargs)
+
+
+def ask_template(
+    parent: tk.Misc | None,
+    current_image: "Image.Image",
+    title: str = "Select Template",
+) -> "Image.Image | None":
+    """Prompt the user for a template image or crop a patch from current image.
+
+    In headless/test mode (parent is None), returns a central patch of current_image.
+    """
+    from PIL import Image
+
+    w, h = current_image.size
+    crop_w = max(8, min(w, w // 3))
+    crop_h = max(8, min(h, h // 3))
+    left = (w - crop_w) // 2
+    top = (h - crop_h) // 2
+    default_crop = current_image.crop((left, top, left + crop_w, top + crop_h))
+
+    if parent is None:
+        return default_crop
+
+    choice = ask_choice(
+        parent,
+        title,
+        "How would you like to provide the template image?",
+        [
+            ("file", "Choose template image file from disk..."),
+            ("crop", "Crop center region from current image"),
+        ],
+        initial="crop",
+    )
+    if choice is None:
+        return None
+    if choice == "file":
+        path = ask_image_file(parent, title="Select template image file")
+        if not path:
+            return None
+        try:
+            return Image.open(path)
+        except Exception as error:
+            show_error(parent, "Template Error", f"Could not open template image: {error}")
+            return None
+    return default_crop

@@ -84,24 +84,97 @@ class MainWindow:
         body = ttk.Panedwindow(container, orient="horizontal")
         body.pack(fill="both", expand=True)
 
-        sidebar = ttk.Frame(body, style="Sidebar.TFrame", padding=12, width=235)
-        sidebar.pack_propagate(False)
-        body.add(sidebar, weight=0)
-        ttk.Label(sidebar, text="Forensics tools", style="Title.TLabel", background="#eef1f5").pack(
+        # Scrollable Sidebar for tools (allowing smooth access to Set 3 & Set 4)
+        sidebar_container = ttk.Frame(body, style="Sidebar.TFrame", width=255)
+        sidebar_container.pack_propagate(False)
+        body.add(sidebar_container, weight=0)
+
+        canvas = tk.Canvas(
+            sidebar_container,
+            bg="#eef1f5",
+            highlightthickness=0,
+            bd=0,
+        )
+        sidebar_scrollbar = ttk.Scrollbar(
+            sidebar_container,
+            orient="vertical",
+            command=canvas.yview,
+        )
+        scrollable_frame = ttk.Frame(canvas, style="Sidebar.TFrame", padding=(12, 12, 6, 12))
+        frame_window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        def _on_frame_configure(_event: tk.Event) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event: tk.Event) -> None:
+            canvas.itemconfig(frame_window_id, width=event.width)
+
+        scrollable_frame.bind("<Configure>", _on_frame_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+        canvas.configure(yscrollcommand=sidebar_scrollbar.set)
+
+        # Mouse-wheel scrolling support
+        def _on_mousewheel(event: tk.Event) -> None:
+            if event.delta:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+
+        def _bind_mousewheel(_event: tk.Event | None = None) -> None:
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all("<Button-4>", _on_mousewheel)
+            canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        def _unbind_mousewheel(_event: tk.Event | None = None) -> None:
+            try:
+                x, y = sidebar_container.winfo_pointerxy()
+                bx = sidebar_container.winfo_rootx()
+                by = sidebar_container.winfo_rooty()
+                bw = sidebar_container.winfo_width()
+                bh = sidebar_container.winfo_height()
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    return
+            except Exception:
+                pass
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        sidebar_container.bind("<Enter>", _bind_mousewheel)
+        sidebar_container.bind("<Leave>", _unbind_mousewheel)
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
+        scrollable_frame.bind("<Enter>", _bind_mousewheel)
+        scrollable_frame.bind("<Leave>", _unbind_mousewheel)
+
+        sidebar_scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        ttk.Label(scrollable_frame, text="Forensics tools", style="Title.TLabel", background="#eef1f5").pack(
             anchor="w", pady=(0, 12)
         )
         for category, tools in self.registry.categories():
-            ttk.Label(sidebar, text=category, style="Category.TLabel").pack(anchor="w", pady=(9, 4))
+            cat_label = ttk.Label(scrollable_frame, text=category, style="Category.TLabel")
+            cat_label.pack(anchor="w", pady=(9, 4))
+            cat_label.bind("<Enter>", _bind_mousewheel)
             for tool in tools:
                 button = ttk.Button(
-                    sidebar,
+                    scrollable_frame,
                     text=tool.title,
                     style="Tool.TButton",
                     command=lambda selected=tool: self.run_tool(selected),
                 )
                 button.pack(fill="x", pady=2)
-                button.bind("<Enter>", lambda _event, selected=tool: self.status.set(selected.description))
-                button.bind("<Leave>", lambda _event: self.status.set("Ready."))
+                button.bind(
+                    "<Enter>",
+                    lambda _event, selected=tool: (self.status.set(selected.description), _bind_mousewheel()),
+                )
+                button.bind(
+                    "<Leave>",
+                    lambda _event: (self.status.set("Ready."), _unbind_mousewheel()),
+                )
 
         self.image_view = ImageView(body)
         body.add(self.image_view, weight=1)
@@ -110,12 +183,24 @@ class MainWindow:
         inspector.pack_propagate(False)
         body.add(inspector, weight=0)
         ttk.Label(inspector, text="Results", style="Title.TLabel").pack(anchor="w", pady=(0, 10))
-        self.results = ttk.Treeview(inspector, columns=("value",), show="tree headings", height=15)
+
+        results_frame = ttk.Frame(inspector)
+        results_frame.pack(fill="both", expand=True)
+        results_scroll = ttk.Scrollbar(results_frame, orient="vertical")
+        self.results = ttk.Treeview(
+            results_frame,
+            columns=("value",),
+            show="tree headings",
+            height=15,
+            yscrollcommand=results_scroll.set,
+        )
+        results_scroll.configure(command=self.results.yview)
+        results_scroll.pack(side="right", fill="y")
         self.results.heading("#0", text="Property")
         self.results.heading("value", text="Value")
         self.results.column("#0", width=95, stretch=True)
         self.results.column("value", width=120, stretch=True)
-        self.results.pack(fill="both", expand=True)
+        self.results.pack(side="left", fill="both", expand=True)
 
         ttk.Label(container, textvariable=self.status, anchor="w", padding=(10, 6), relief="sunken").pack(fill="x")
 

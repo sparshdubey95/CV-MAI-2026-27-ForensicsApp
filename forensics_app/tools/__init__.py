@@ -14,6 +14,9 @@ from .masking import MaskingTool
 from .registry import ToolRegistry
 from .sharpening import SharpeningTool
 from .skimage_filters import SkimageFiltersTool
+from .template_matching import NormalizedCrossCorrTool, TemplateMatchingTool
+from .hog_feature import HOGFeatureTool
+from .hog_detection import HOGPersonDetectionTool
 
 
 def build_tool_registry() -> ToolRegistry:
@@ -35,8 +38,14 @@ def build_tool_registry() -> ToolRegistry:
             CannyEdgeTool(),
             EdgeVisualisationTool(),
             SharpeningTool(),
+            # Set 4: Feature & HOG Detection
+            NormalizedCrossCorrTool(),
+            TemplateMatchingTool(),
+            HOGFeatureTool(),
+            HOGPersonDetectionTool(),
         ]
     )
 
 
 __all__ = ["ToolRegistry", "build_tool_registry"]
+
