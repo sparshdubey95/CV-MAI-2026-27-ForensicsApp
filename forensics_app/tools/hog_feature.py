@@ -225,8 +225,8 @@ class HOGFeatureTool(ForensicsTool):
             "HOG Pixels Per Cell",
             "Select cell size (pixels per cell):",
             [
-                ("6", "6 × 6 pixels (Slide 4 standard)"),
-                ("8", "8 × 8 pixels (HOG standard)"),
+                ("6", "6 × 6 pixels "),
+                ("8", "8 × 8 pixels "),
                 ("12", "12 × 12 pixels"),
                 ("16", "16 × 16 pixels"),
             ],
@@ -243,8 +243,8 @@ class HOGFeatureTool(ForensicsTool):
             "HOG Cells Per Block",
             "Select block normalization size (cells per block):",
             [
-                ("3", "3 × 3 cells (Slide 4 standard)"),
-                ("2", "2 × 2 cells (HOG standard)"),
+                ("3", "3 × 3 cells "),
+                ("2", "2 × 2 cells "),
                 ("1", "1 × 1 cell"),
             ],
             initial="3" if vis_mode == "multi" else "2",
@@ -269,7 +269,7 @@ class HOGFeatureTool(ForensicsTool):
 
             return ToolResult(
                 image=output_image,
-                message="Extracted HOG features across multiple orientations (Slide 4 comparison).",
+                message="Extracted HOG features across multiple orientations .",
                 details=details,
             )
 
@@ -282,7 +282,7 @@ class HOGFeatureTool(ForensicsTool):
                 ("2", "2 orientations"),
                 ("4", "4 orientations"),
                 ("8", "8 orientations"),
-                ("9", "9 orientations (standard)"),
+                ("9", "9 orientations "),
                 ("16", "16 orientations"),
             ],
             initial="9",
