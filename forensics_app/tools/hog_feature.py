@@ -210,7 +210,7 @@ class HOGFeatureTool(ForensicsTool):
                 "HOG Visualization Format",
                 "Choose presentation format (Slide 4):",
                 [
-                    ("multi", "Multi-orientation comparison (4 panels: Original | 2 | 4 | 9 – as in Slide 4)"),
+                    ("multi", "Multi-orientation comparison"),
                     ("single", "Single orientation visualization"),
                 ],
                 initial="multi",
