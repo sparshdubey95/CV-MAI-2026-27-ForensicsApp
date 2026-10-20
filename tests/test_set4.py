@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
@@ -15,10 +16,10 @@ from forensics_app.tools.template_matching import (
     render_ncc_image,
     render_ncc_figure,
     render_template_matching_figure,
-    find_default_template,
     rotate_template,
     match_template_configured,
     draw_bounding_box,
+    select_template,
 )
 from forensics_app.tools.hog_feature import (
     HOGFeatureTool,
@@ -107,11 +108,20 @@ class NormalizedCrossCorrTests(unittest.TestCase):
         doc = ImageDocument()
         doc.current = self.image
         tool = NormalizedCrossCorrTool()
-        result = tool.run(None, doc)
-        self.assertIsNotNone(result)
-        self.assertIsNotNone(result.image)
-        self.assertIn("Peak correlation", result.details)
-        self.assertIn("Peak coordinate (y, x)", result.details)
+        with patch("forensics_app.tools.template_matching.select_template", return_value=self.template):
+            result = tool.run(None, doc)
+            self.assertIsNotNone(result)
+            self.assertIsNotNone(result.image)
+            self.assertIn("Peak correlation", result.details)
+            self.assertIn("Peak coordinate (y, x)", result.details)
+
+    def test_normalized_cross_corr_tool_cancel(self) -> None:
+        doc = ImageDocument()
+        doc.current = self.image
+        tool = NormalizedCrossCorrTool()
+        with patch("forensics_app.tools.template_matching.select_template", return_value=None):
+            result = tool.run(None, doc)
+            self.assertIsNone(result)
 
 
 # ── 2. Set 4.2: Template Matching Configs Tests ─────────────────────────────
@@ -133,19 +143,6 @@ class TemplateMatchingConfigTests(unittest.TestCase):
         # 90 degree rotation swaps dimensions (approx)
         self.assertGreater(rotated.shape[0], 0)
 
-    def test_match_template_configured_overlay(self) -> None:
-        out_img, details = match_template_configured(
-            self.image,
-            self.template,
-            angle=0.0,
-            threshold=0.8,
-            style="overlay",
-        )
-        self.assertEqual(out_img.size, (64, 64))
-        self.assertEqual(out_img.mode, "RGB")
-        self.assertGreater(details["Matches above threshold"], 0)
-        self.assertIn("Bounding box top-left", details)
-
     def test_match_template_configured_dimmed(self) -> None:
         out_img, details = match_template_configured(
             self.image,
@@ -155,18 +152,68 @@ class TemplateMatchingConfigTests(unittest.TestCase):
             style="dimmed",
         )
         self.assertEqual(out_img.size, (64, 64))
+        self.assertEqual(out_img.mode, "RGB")
         self.assertEqual(details["Display style"], "dimmed")
+        self.assertGreater(details["Matches above threshold"], 0)
+        self.assertIn("Bounding box top-left", details)
 
-    def test_match_template_configured_heatmap(self) -> None:
+    def test_match_template_configured_red_on_gray(self) -> None:
         out_img, details = match_template_configured(
             self.image,
             self.template,
             angle=0.0,
             threshold=0.8,
-            style="heatmap",
+            style="red_on_gray",
         )
         self.assertEqual(out_img.size, (64, 64))
-        self.assertEqual(details["Display style"], "heatmap")
+        self.assertEqual(out_img.mode, "RGB")
+        self.assertEqual(details["Display style"], "red_on_gray")
+
+    def test_match_template_configured_transparent(self) -> None:
+        out_img, details = match_template_configured(
+            self.image,
+            self.template,
+            angle=0.0,
+            threshold=0.8,
+            style="transparent",
+        )
+        self.assertEqual(out_img.size, (64, 64))
+        self.assertEqual(out_img.mode, "RGB")
+        self.assertEqual(details["Display style"], "transparent")
+
+    def test_match_template_configured_contour(self) -> None:
+        out_img, details = match_template_configured(
+            self.image,
+            self.template,
+            angle=0.0,
+            threshold=0.8,
+            style="contour",
+        )
+        self.assertEqual(out_img.size, (64, 64))
+        self.assertEqual(out_img.mode, "RGB")
+        self.assertEqual(details["Display style"], "contour")
+
+    def test_match_template_configured_with_rotation(self) -> None:
+        out_img, details = match_template_configured(
+            self.image,
+            self.template,
+            angle=45.0,
+            threshold=0.8,
+        )
+        self.assertEqual(out_img.size, (64, 64))
+        self.assertEqual(details["Rotation angle"], "45.0°")
+
+    def test_match_template_configured_as_figure(self) -> None:
+        fig_img, details = match_template_configured(
+            self.image,
+            self.template,
+            angle=0.0,
+            threshold=0.8,
+            as_figure=True,
+        )
+        self.assertIsInstance(fig_img, Image.Image)
+        self.assertEqual(fig_img.mode, "RGB")
+        self.assertGreater(fig_img.width, 100)
 
     def test_draw_bounding_box_within_bounds(self) -> None:
         arr = np.zeros((20, 20, 3), dtype=np.uint8)
@@ -189,10 +236,37 @@ class TemplateMatchingConfigTests(unittest.TestCase):
         doc = ImageDocument()
         doc.current = self.image
         tool = TemplateMatchingTool()
-        result = tool.run(None, doc)
-        self.assertIsNotNone(result)
-        self.assertIsNotNone(result.image)
-        self.assertIn("Peak correlation", result.details)
+        with patch("forensics_app.tools.template_matching.select_template", return_value=self.template):
+            result = tool.run(None, doc)
+            self.assertIsNotNone(result)
+            self.assertIsNotNone(result.image)
+            self.assertIn("Peak correlation", result.details)
+
+    def test_template_matching_tool_cancel(self) -> None:
+        doc = ImageDocument()
+        doc.current = self.image
+        tool = TemplateMatchingTool()
+        with patch("forensics_app.tools.template_matching.select_template", return_value=None):
+            result = tool.run(None, doc)
+            self.assertIsNone(result)
+
+    def test_template_matching_tool_cancel_style(self) -> None:
+        doc = ImageDocument()
+        doc.current = self.image
+        tool = TemplateMatchingTool()
+        with patch("forensics_app.tools.template_matching.select_template", return_value=self.template), \
+             patch("forensics_app.tools.template_matching.ask_choice", return_value=None):
+            result = tool.run(None, doc)
+            self.assertIsNone(result)
+
+    def test_select_template_cancel_and_error(self) -> None:
+        # User cancels file picker
+        with patch("forensics_app.tools.template_matching.ask_image_file", return_value=None):
+            self.assertIsNone(select_template(None))
+
+        # Invalid file selected
+        with patch("forensics_app.tools.template_matching.ask_image_file", return_value="non_existent_file.xyz"):
+            self.assertIsNone(select_template(None))
 
 
 # ── 3. Set 4.3: HOG Feature Extraction Tests ─────────────────────────────────
