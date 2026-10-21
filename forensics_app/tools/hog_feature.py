@@ -24,7 +24,7 @@ import skimage.feature as feature
 
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
-from .dialogs import ask_choice, show_error
+from .dialogs import show_error
 
 
 # ── Algorithmic Functions ───────────────────────────────────────────────────
@@ -192,128 +192,29 @@ def compute_hog_comparison_figure(
 # ── Tool Class ───────────────────────────────────────────────────────────────
 
 class HOGFeatureTool(ForensicsTool):
-    """Set 4.3: HOG extraction and visualization with configurable orientations."""
+    """Set 4.3: Render the fixed multi-orientation comparison from Slide 4."""
 
     tool_id = "hog_feature"
     title = "HOG feature extraction"
     category = "Set 4: Feature & HOG Detection"
     description = "Extract HOG features and display the 4-panel comparison from Slide 4."
 
-    def run(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:
+    def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         assert document.current is not None
 
-        # 1. Visualization format (Slide 4 default: 4-panel multi-orientation in GUI)
-        vis_mode = "multi" if parent is not None else "single"
-        if parent is not None:
-            mode_choice = ask_choice(
-                parent,
-                "HOG Visualization Format",
-                "Choose presentation format (Slide 4):",
-                [
-                    ("multi", "Multi-orientation comparison"),
-                    ("single", "Single orientation visualization"),
-                ],
-                initial="multi",
-            )
-            if mode_choice is None:
-                return None
-            vis_mode = mode_choice
-
-        # 2. Configurable pixels_per_cell (Slide 4: default (6, 6))
-        ppc_choice = ask_choice(
-            parent,
-            "HOG Pixels Per Cell",
-            "Select cell size (pixels per cell):",
-            [
-                ("6", "6 × 6 pixels "),
-                ("8", "8 × 8 pixels "),
-                ("12", "12 × 12 pixels"),
-                ("16", "16 × 16 pixels"),
-            ],
-            initial="6" if vis_mode == "multi" else "8",
-        )
-        if ppc_choice is None:
-            return None
-        ppc_val = int(ppc_choice)
-        pixels_per_cell = (ppc_val, ppc_val)
-
-        # 3. Configurable cells_per_block (Slide 4: default (3, 3))
-        cpb_choice = ask_choice(
-            parent,
-            "HOG Cells Per Block",
-            "Select block normalization size (cells per block):",
-            [
-                ("3", "3 × 3 cells "),
-                ("2", "2 × 2 cells "),
-                ("1", "1 × 1 cell"),
-            ],
-            initial="3" if vis_mode == "multi" else "2",
-        )
-        if cpb_choice is None:
-            return None
-        cpb_val = int(cpb_choice)
-        cells_per_block = (cpb_val, cpb_val)
-
-        # If multi-orientation comparison is chosen, render the exact 4 panels of Slide 4
-        if vis_mode == "multi":
-            try:
-                output_image, details = compute_hog_comparison_figure(
-                    document.current,
-                    orientations_list=[2, 4, 9],
-                    pixels_per_cell=pixels_per_cell,
-                    cells_per_block=cells_per_block,
-                )
-            except ValueError as err:
-                show_error(parent, "HOG Error", str(err))
-                return None
-
-            return ToolResult(
-                image=output_image,
-                message="Extracted HOG features across multiple orientations .",
-                details=details,
-            )
-
-        # Otherwise, user chose single orientation
-        ori_choice = ask_choice(
-            parent,
-            "HOG Orientations",
-            "Select number of orientation bins:",
-            [
-                ("2", "2 orientations"),
-                ("4", "4 orientations"),
-                ("8", "8 orientations"),
-                ("9", "9 orientations "),
-                ("16", "16 orientations"),
-            ],
-            initial="9",
-        )
-        if ori_choice is None:
-            return None
-        orientations = int(ori_choice)
-
         try:
-            fd, hog_image = compute_hog(
+            output_image, details = compute_hog_comparison_figure(
                 document.current,
-                orientations=orientations,
-                pixels_per_cell=pixels_per_cell,
-                cells_per_block=cells_per_block,
+                orientations_list=[2, 4, 9],
+                pixels_per_cell=(6, 6),
+                cells_per_block=(3, 3),
             )
         except ValueError as err:
             show_error(parent, "HOG Error", str(err))
             return None
 
-        details = {
-            "Operation": "HOG Feature Extraction",
-            "Descriptor length": len(fd),
-            "Orientations": orientations,
-            "Pixels per cell": f"{pixels_per_cell[0]} × {pixels_per_cell[1]}",
-            "Cells per block": f"{cells_per_block[0]} × {cells_per_block[1]}",
-            "Descriptor min": f"{float(np.min(fd)):.4f}",
-            "Descriptor max": f"{float(np.max(fd)):.4f}",
-            "Descriptor mean": f"{float(np.mean(fd)):.4f}",
-        }
         return ToolResult(
-            image=hog_image,
-            message=f"HOG extracted ({orientations} orientations, descriptor length: {len(fd)}).",
+            image=output_image,
+            message="Compared HOG visualizations for 2, 4, and 9 orientations.",
             details=details,
         )

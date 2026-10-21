@@ -13,7 +13,7 @@ This module implements:
 from __future__ import annotations
 
 import io
-import os
+from pathlib import Path
 import tkinter as tk
 from typing import Any
 
@@ -27,7 +27,7 @@ import skimage.feature as feature
 
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
-from .dialogs import ask_choice, ask_image_file, ask_int, show_error
+from .dialogs import ask_image_file, show_error
 from .template_matching import draw_bounding_box
 
 
@@ -37,33 +37,20 @@ def find_default_person_template(
     document_path: str | None = None,
 ) -> Image.Image | None:
     """Try to find the official person template (person_template.bmp) from Slide 5."""
-    candidate_paths: list[str] = []
+    candidate_paths: list[Path] = []
 
     # 1. Look in the same folder as the currently opened image
     if document_path:
-        folder = os.path.dirname(document_path)
-        candidate_paths.append(os.path.join(folder, "person_template.bmp"))
-        # Check parent folder as well (e.g., if inside pedestrians/ subfolder)
-        candidate_paths.append(os.path.join(os.path.dirname(folder), "person_template.bmp"))
-
-    # 2. Look in common download folders for Set 4 materials
-    downloads_dirs = [
-        r"D:\Downloads\Set4_images\Set4_images",
-        r"D:\Downloads\Set4_images",
-        r"C:\Users\Sparsh\Downloads\Set4_images\Set4_images",
-        r"C:\Users\Sparsh\Downloads\Set4_images",
-        os.path.join(os.path.expanduser("~"), "Downloads", "Set4_images", "Set4_images"),
-    ]
-    for d in downloads_dirs:
-        candidate_paths.append(os.path.join(d, "person_template.bmp"))
+        folder = Path(document_path).parent
+        candidate_paths.extend((folder / "person_template.bmp", folder.parent / "person_template.bmp"))
 
     for path in candidate_paths:
-        if os.path.isfile(path):
+        if path.is_file():
             try:
                 with Image.open(path) as img:
                     return img.copy()
-            except Exception:
-                pass
+            except OSError:
+                continue
 
     return None
 
@@ -73,59 +60,28 @@ def acquire_person_template(
     image: Image.Image,
     document_path: str | None = None,
 ) -> Image.Image | None:
-    """Prompt the user for a template for HOG person detection (smart default for Slide 5)."""
+    """Use a nearby assignment template, or prompt for one with a crop fallback."""
     default_tmpl = find_default_person_template(document_path)
 
-    # In headless / test mode (parent is None)
-    if parent is None:
-        if default_tmpl is not None:
-            tw, th = default_tmpl.size
-            iw, ih = image.size
-            if tw <= iw and th <= ih:
-                return default_tmpl
-        # Fallback to an elongated portrait crop that guaranteed fits inside image
-        w, h = image.size
-        crop_w = max(8, min(w, w // 3))
-        crop_h = max(8, min(h, h // 2))
-        left = (w - crop_w) // 2
-        top = (h - crop_h) // 2
-        return image.crop((left, top, left + crop_w, top + crop_h))
-
-    options: list[tuple[str, str]] = []
     if default_tmpl is not None:
-        options.append(
-            ("default", "Standard assignment template (person_template.bmp – as in Slide 5)")
-        )
-    options.append(("file", "Choose template image file from disk..."))
-    options.append(("crop", "Crop region from current image"))
+        tw, th = default_tmpl.size
+        iw, ih = image.size
+        if tw <= iw and th <= ih:
+            return default_tmpl
 
-    choice = ask_choice(
-        parent,
-        "Select Person Template",
-        "Select template image for HOG person detection:",
-        options,
-        initial="default" if default_tmpl is not None else "crop",
-    )
-    if choice is None:
-        return None
-
-    if choice == "default" and default_tmpl is not None:
-        return default_tmpl
-
-    if choice == "file":
+    if parent is not None:
         path = ask_image_file(parent, title="Select person template image file")
-        if not path:
-            return None
-        try:
-            return Image.open(path)
-        except Exception as error:
-            show_error(parent, "Template Error", f"Could not open template image: {error}")
-            return None
+        if path:
+            try:
+                with Image.open(path) as selected:
+                    return selected.copy()
+            except OSError as error:
+                show_error(parent, "Template Error", f"Could not open template image: {error}")
+                return None
 
-    # 'crop'
     w, h = image.size
-    crop_w = max(8, min(w, w // 3))
-    crop_h = max(8, min(h, h // 2))
+    crop_w = min(w, max(8, w // 3))
+    crop_h = min(h, max(8, h // 2))
     left = (w - crop_w) // 2
     top = (h - crop_h) // 2
     return image.crop((left, top, left + crop_w, top + crop_h))
@@ -357,7 +313,7 @@ class HOGPersonDetectionTool(ForensicsTool):
     category = "Set 4: Feature & HOG Detection"
     description = "Locate person using HOG sliding-window matching and display the 3-panel figure from Slide 5."
 
-    def run(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:
+    def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         assert document.current is not None
 
         # 1. Ask for person template (smart default to person_template.bmp from Slide 5)
@@ -366,47 +322,16 @@ class HOGPersonDetectionTool(ForensicsTool):
         if template is None:
             return None
 
-        # 2. Configurable step size
-        step_size = ask_int(
-            parent,
-            "HOG Sliding Window Step Size",
-            "Sliding-window step size in pixels (e.g., 8 for fine, 16 for fast):",
-            initial=16,
-            min_val=2,
-            max_val=64,
-        )
-        if step_size is None:
-            return None
-
-        # 3. Visualization format
-        vis_choice = "figure" if parent is not None else "side_by_side"
-        if parent is not None:
-            choice = ask_choice(
-                parent,
-                "Detection Presentation",
-                "Choose presentation format (Slide 5):",
-                [
-                    ("figure", "3-panel figure (Original | Euclidean | Dot product – as in Slide 5)"),
-                    ("both", "Single image with both detections (Red: Euclid, Green: Dot product)"),
-                    ("euclidean", "Single image: Euclidean distance match only (Red)"),
-                    ("dot_product", "Single image: Dot product match only (Red)"),
-                ],
-                initial="figure",
-            )
-            if choice is None:
-                return None
-            vis_choice = choice
-
         try:
             output_image, details = detect_person_hog(
                 document.current,
                 template,
-                step_size=step_size,
+                step_size=16,
                 orientations=16,          # Slide 5 standard
                 pixels_per_cell=(8, 8),   # Slide 5 standard
                 cells_per_block=(2, 2),   # Slide 5 standard
-                method=vis_choice if vis_choice != "figure" else "side_by_side",
-                as_figure=(vis_choice == "figure"),
+                method="side_by_side",
+                as_figure=True,
             )
         except ValueError as err:
             if parent is not None:

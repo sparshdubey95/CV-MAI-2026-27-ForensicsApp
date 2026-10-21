@@ -2,7 +2,7 @@
 
 This module implements:
   - Set 4.1: Normalized cross-correlation (NCC) using skimage.feature.match_template.
-             Displays a 4-panel figure: Original image, Template, NCC map, and Thresholded image.
+             Displays a 3-panel figure: Original image, Template, and NCC image.
   - Set 4.2: Template matching with configurable rotation angle and detection threshold,
              displaying a 2-panel figure: Rotated template and Thresholded image (dimmed background
              with red detections).
@@ -25,7 +25,7 @@ import skimage.transform as transform
 
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
-from .dialogs import ask_float, ask_image_file, show_error
+from .dialogs import ask_image_file, ask_template_matching_parameters, show_error
 
 
 # ── Template Selection ──────────────────────────────────────────────────────
@@ -115,9 +115,7 @@ def render_ncc_image(corr_map: np.ndarray) -> Image.Image:
 def rotate_template(template: Image.Image | np.ndarray, angle: float) -> np.ndarray:
     """Rotate template by angle in degrees using skimage.transform.rotate."""
     gray_tmpl = to_gray_float(template)
-    if angle % 360 == 0:
-        return gray_tmpl
-    return transform.rotate(gray_tmpl, angle, resize=False, mode="edge")
+    return transform.rotate(gray_tmpl, angle)
 
 
 def draw_bounding_box(
@@ -153,45 +151,21 @@ def render_ncc_figure(
     image: Image.Image | np.ndarray,
     template: Image.Image | np.ndarray,
     corr_map: np.ndarray,
-    threshold: float = 0.8,
-    layout: str = "4_panel",
 ) -> Image.Image:
-    """Render 4-panel figure: Original image, Template, NCC map, and Thresholded image.
-
-    Detections are shown in red on a background dimmed to 40%.
-    If no positions pass the threshold, the global maximum is highlighted.
-    """
-    gray_img = to_gray_float(image)
-    gray_tmpl = to_gray_float(template)
+    """Render the Slide 1 comparison: original image, template, and NCC image."""
+    original = np.asarray(image.convert("RGB")) if isinstance(image, Image.Image) else image
+    displayed_template = (
+        np.asarray(template.convert("RGB")) if isinstance(template, Image.Image) else template
+    )
     clean_corr = np.nan_to_num(corr_map, nan=0.0)
 
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8), dpi=100)
-
-    # Panel 1: Original image
-    axes[0, 0].imshow(gray_img, cmap="gray")
-    axes[0, 0].set_title("Original image")
-
-    # Panel 2: Template
-    axes[0, 1].imshow(gray_tmpl, cmap="gray")
-    axes[0, 1].set_title("Template")
-
-    # Panel 3: Normalized cross-correlation map
-    axes[1, 0].imshow(clean_corr, cmap="gray")
-    axes[1, 0].set_title("Normalized cross-corr image")
-
-    # Panel 4: Thresholded image (background dimmed to 40% with red detections)
-    rgb_base = color.gray2rgb(gray_img) * 0.4
-    matches_mask = clean_corr >= threshold
-
-    if np.any(matches_mask):
-        rgb_base[matches_mask] = [1.0, 0.0, 0.0]
-    else:
-        # If no position passes the threshold, highlight the global maximum
-        peak_y, peak_x = np.unravel_index(np.argmax(clean_corr), clean_corr.shape)
-        rgb_base[peak_y, peak_x] = [1.0, 0.0, 0.0]
-
-    axes[1, 1].imshow(rgb_base)
-    axes[1, 1].set_title("Thresholded image")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=100)
+    axes[0].imshow(original, cmap="gray" if original.ndim == 2 else None)
+    axes[0].set_title("Original image")
+    axes[1].imshow(displayed_template, cmap="gray" if displayed_template.ndim == 2 else None)
+    axes[1].set_title("Template")
+    axes[2].imshow(clean_corr, cmap="gray")
+    axes[2].set_title("Normalized cross-corr image")
 
     fig.tight_layout()
 
@@ -213,7 +187,7 @@ def render_template_matching_figure(
 
     # Left: Rotated template with angle label
     axes[0].imshow(template_r, cmap="gray")
-    axes[0].set_title("Template", fontsize=12)
+    axes[0].set_title("Rotated Template", fontsize=12)
     axes[0].set_xlabel(f"Configurable angle: {angle:.1f}°", fontsize=10)
 
     # Right: Thresholded image with threshold label
@@ -249,8 +223,7 @@ def match_template_configured(
     gray_img = to_gray_float(image)
     gray_tmpl = to_gray_float(template)
 
-    if angle % 360 != 0:
-        gray_tmpl = rotate_template(gray_tmpl, angle)
+    gray_tmpl = rotate_template(gray_tmpl, angle)
 
     ih, iw = gray_img.shape[:2]
     th, tw = gray_tmpl.shape[:2]
@@ -307,12 +280,12 @@ def match_template_configured(
 # ── ForensicsTool Classes ───────────────────────────────────────────────────
 
 class NormalizedCrossCorrTool(ForensicsTool):
-    """Set 4.1: Compute normalized cross-correlation and render 4-panel figure."""
+    """Set 4.1: Compute normalized cross-correlation and render the 3-panel figure."""
 
     tool_id = "normalized_cross_corr"
     title = "Normalized cross-correlation"
     category = "Set 4: Feature & HOG Detection"
-    description = "Compute normalized cross-correlation map and display the 4-panel figure."
+    description = "Compute normalized cross-correlation and display the Slide 1 comparison."
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         assert document.current is not None
@@ -335,7 +308,6 @@ class NormalizedCrossCorrTool(ForensicsTool):
             image=document.current,
             template=template,
             corr_map=corr_map,
-            threshold=0.8,
         )
 
         return ToolResult(
@@ -347,7 +319,6 @@ class NormalizedCrossCorrTool(ForensicsTool):
                 "Peak coordinate (y, x)": f"({peak_y}, {peak_x})",
                 "Template dimensions": f"{template.width} × {template.height}",
                 "Search image dimensions": f"{document.current.width} × {document.current.height}",
-                "Threshold": "0.80",
             },
         )
 
@@ -367,27 +338,10 @@ class TemplateMatchingTool(ForensicsTool):
         if template is None:
             return None
 
-        angle = ask_float(
-            parent,
-            "Template Rotation",
-            "Template rotation angle in degrees (-360 to 360):",
-            initial=0.0,
-            min_val=-360.0,
-            max_val=360.0,
-        )
-        if angle is None:
+        parameters = ask_template_matching_parameters(parent)
+        if parameters is None:
             return None
-
-        threshold = ask_float(
-            parent,
-            "Match Threshold",
-            "Detection threshold (0.0 to 1.0):",
-            initial=0.8,
-            min_val=0.0,
-            max_val=1.0,
-        )
-        if threshold is None:
-            return None
+        angle, threshold = parameters
 
         try:
             output_image, details = match_template_configured(

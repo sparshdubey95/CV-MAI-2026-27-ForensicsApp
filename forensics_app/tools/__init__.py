@@ -17,6 +17,10 @@ from .skimage_filters import SkimageFiltersTool
 from .template_matching import NormalizedCrossCorrTool, TemplateMatchingTool
 from .hog_feature import HOGFeatureTool
 from .hog_detection import HOGPersonDetectionTool
+from .corners import CornerDetectionTool
+from .feature_descriptors import FeatureDescriptorTool
+from .feature_matching import FeatureMatchingTool
+from .image_lookup import ImageLookupTool
 
 
 def build_tool_registry() -> ToolRegistry:
@@ -43,9 +47,13 @@ def build_tool_registry() -> ToolRegistry:
             TemplateMatchingTool(),
             HOGFeatureTool(),
             HOGPersonDetectionTool(),
+            # Set 5: Features & Matching
+            CornerDetectionTool(),
+            FeatureDescriptorTool(),
+            FeatureMatchingTool(),
+            ImageLookupTool(),
         ]
     )
 
 
 __all__ = ["ToolRegistry", "build_tool_registry"]
-

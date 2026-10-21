@@ -47,8 +47,6 @@ def make_pattern_image(width: int = 64, height: int = 64) -> Image.Image:
     return Image.fromarray(arr, mode="RGB")
 
 
-# ── 1. Set 4.1: Normalized Cross-Correlation Tests ──────────────────────────
-
 class NormalizedCrossCorrTests(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -89,17 +87,22 @@ class NormalizedCrossCorrTests(unittest.TestCase):
         self.assertEqual(rendered.mode, "L")
         self.assertEqual(rendered.size, (64, 64))
 
-    def test_render_ncc_figure_4_panel(self) -> None:
+    def test_render_ncc_figure_has_three_panels(self) -> None:
         corr_map = compute_ncc_map(self.image, self.template, pad_input=True)
-        fig_img = render_ncc_figure(self.image, self.template, corr_map, layout="4_panel")
+        import matplotlib.pyplot as plt
+        with patch(
+            "forensics_app.tools.template_matching.plt.subplots",
+            wraps=plt.subplots,
+        ) as subplots:
+            fig_img = render_ncc_figure(self.image, self.template, corr_map)
+            self.assertEqual(subplots.call_args.args[:2], (1, 3))
         self.assertIsInstance(fig_img, Image.Image)
         self.assertEqual(fig_img.mode, "RGB")
         self.assertGreater(fig_img.width, 100)
-        self.assertGreater(fig_img.height, 100)
 
-    def test_render_ncc_figure_3_panel(self) -> None:
+    def test_render_ncc_figure_keeps_single_row_layout(self) -> None:
         corr_map = compute_ncc_map(self.image, self.template, pad_input=True)
-        fig_img = render_ncc_figure(self.image, self.template, corr_map, layout="3_panel")
+        fig_img = render_ncc_figure(self.image, self.template, corr_map)
         self.assertIsInstance(fig_img, Image.Image)
         self.assertEqual(fig_img.mode, "RGB")
         self.assertGreater(fig_img.width, 100)
@@ -123,8 +126,6 @@ class NormalizedCrossCorrTests(unittest.TestCase):
             result = tool.run(None, doc)
             self.assertIsNone(result)
 
-
-# ── 2. Set 4.2: Template Matching Configs Tests ─────────────────────────────
 
 class TemplateMatchingConfigTests(unittest.TestCase):
 
@@ -157,42 +158,6 @@ class TemplateMatchingConfigTests(unittest.TestCase):
         self.assertGreater(details["Matches above threshold"], 0)
         self.assertIn("Bounding box top-left", details)
 
-    def test_match_template_configured_red_on_gray(self) -> None:
-        out_img, details = match_template_configured(
-            self.image,
-            self.template,
-            angle=0.0,
-            threshold=0.8,
-            style="red_on_gray",
-        )
-        self.assertEqual(out_img.size, (64, 64))
-        self.assertEqual(out_img.mode, "RGB")
-        self.assertEqual(details["Display style"], "red_on_gray")
-
-    def test_match_template_configured_transparent(self) -> None:
-        out_img, details = match_template_configured(
-            self.image,
-            self.template,
-            angle=0.0,
-            threshold=0.8,
-            style="transparent",
-        )
-        self.assertEqual(out_img.size, (64, 64))
-        self.assertEqual(out_img.mode, "RGB")
-        self.assertEqual(details["Display style"], "transparent")
-
-    def test_match_template_configured_contour(self) -> None:
-        out_img, details = match_template_configured(
-            self.image,
-            self.template,
-            angle=0.0,
-            threshold=0.8,
-            style="contour",
-        )
-        self.assertEqual(out_img.size, (64, 64))
-        self.assertEqual(out_img.mode, "RGB")
-        self.assertEqual(details["Display style"], "contour")
-
     def test_match_template_configured_with_rotation(self) -> None:
         out_img, details = match_template_configured(
             self.image,
@@ -209,11 +174,14 @@ class TemplateMatchingConfigTests(unittest.TestCase):
             self.template,
             angle=0.0,
             threshold=0.8,
+            style="dimmed",
             as_figure=True,
         )
         self.assertIsInstance(fig_img, Image.Image)
         self.assertEqual(fig_img.mode, "RGB")
         self.assertGreater(fig_img.width, 100)
+        self.assertGreater(fig_img.height, 100)
+        self.assertEqual(details["Display style"], "dimmed")
 
     def test_draw_bounding_box_within_bounds(self) -> None:
         arr = np.zeros((20, 20, 3), dtype=np.uint8)
@@ -241,6 +209,8 @@ class TemplateMatchingConfigTests(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertIsNotNone(result.image)
             self.assertIn("Peak correlation", result.details)
+            self.assertEqual(result.details["Rotation angle"], "0.0°")
+            self.assertEqual(result.details["Threshold"], "0.80")
 
     def test_template_matching_tool_cancel(self) -> None:
         doc = ImageDocument()
@@ -250,12 +220,12 @@ class TemplateMatchingConfigTests(unittest.TestCase):
             result = tool.run(None, doc)
             self.assertIsNone(result)
 
-    def test_template_matching_tool_cancel_style(self) -> None:
+    def test_template_matching_tool_cancel_parameters(self) -> None:
         doc = ImageDocument()
         doc.current = self.image
         tool = TemplateMatchingTool()
         with patch("forensics_app.tools.template_matching.select_template", return_value=self.template), \
-             patch("forensics_app.tools.template_matching.ask_choice", return_value=None):
+             patch("forensics_app.tools.template_matching.ask_template_matching_parameters", return_value=None):
             result = tool.run(None, doc)
             self.assertIsNone(result)
 
@@ -268,8 +238,6 @@ class TemplateMatchingConfigTests(unittest.TestCase):
         with patch("forensics_app.tools.template_matching.ask_image_file", return_value="non_existent_file.xyz"):
             self.assertIsNone(select_template(None))
 
-
-# ── 3. Set 4.3: HOG Feature Extraction Tests ─────────────────────────────────
 
 class HOGFeatureTests(unittest.TestCase):
 
@@ -339,9 +307,9 @@ class HOGFeatureTests(unittest.TestCase):
         self.assertIsNotNone(result.image)
         self.assertIn("Descriptor length", result.details)
         self.assertEqual(result.details["Orientations"], 9)
+        self.assertEqual(result.details["Pixels per cell"], "6 × 6")
+        self.assertEqual(result.details["Cells per block"], "3 × 3")
 
-
-# ── 4. Set 4.4: HOG Person / Object Detection Tests ──────────────────────────
 
 class HOGDetectionTests(unittest.TestCase):
 
@@ -420,9 +388,8 @@ class HOGDetectionTests(unittest.TestCase):
         self.assertIsNotNone(result.image)
         self.assertIn("Best Euclidean location", result.details)
         self.assertIn("Best Dot Product location", result.details)
-
-
-# ── 5. Registry & UI Scrollability Tests ─────────────────────────────────────
+        self.assertEqual(result.details["Step size"], "16 px")
+        self.assertEqual(result.details["Visualization"], "Slide 5 figure")
 
 class RegistryAndUITests(unittest.TestCase):
 
@@ -490,4 +457,3 @@ class RegistryAndUITests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

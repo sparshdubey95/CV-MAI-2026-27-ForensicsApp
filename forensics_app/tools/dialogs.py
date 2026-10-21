@@ -11,7 +11,7 @@ IMAGE_FILETYPES = [
 ]
 
 
-def ask_image_file(parent: tk.Misc, title: str = "Select image") -> str | None:
+def ask_image_file(parent: tk.Misc | None, title: str = "Select image") -> str | None:
     """Ask the user to select an image file; return the path or None if cancelled."""
     filename = filedialog.askopenfilename(
         parent=parent,
@@ -21,9 +21,18 @@ def ask_image_file(parent: tk.Misc, title: str = "Select image") -> str | None:
     return filename or None
 
 
-def show_error(parent: tk.Misc, title: str, message: str) -> None:
+def ask_image_folder(parent: tk.Misc | None, title: str = "Select image folder") -> str | None:
+    """Ask the user to select a folder; return its path or None if cancelled."""
+    folder = filedialog.askdirectory(parent=parent, title=title, mustexist=True)
+    return folder or None
+
+
+def show_error(parent: tk.Misc | None, title: str, message: str) -> None:
     """Display an error message dialog to the user."""
-    messagebox.showerror(title, message, parent=parent)
+    if parent is None:
+        messagebox.showerror(title, message)
+    else:
+        messagebox.showerror(title, message, parent=parent)
 
 
 def ask_choice(
@@ -90,6 +99,70 @@ def ask_float(
     if max_val is not None:
         kwargs["maxvalue"] = max_val
     return simpledialog.askfloat(title, prompt, **kwargs)
+
+
+def ask_template_matching_parameters(
+    parent: tk.Misc | None,
+    initial_angle: float = 0.0,
+    initial_threshold: float = 0.8,
+) -> tuple[float, float] | None:
+    """Ask for rotation and threshold together, or return slide defaults headlessly."""
+    if parent is None:
+        return initial_angle, initial_threshold
+
+    result: dict[str, tuple[float, float] | None] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Template Matching Parameters")
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=12)
+    frame.pack(fill="both", expand=True)
+
+    angle_var = tk.StringVar(value=str(initial_angle))
+    threshold_var = tk.StringVar(value=str(initial_threshold))
+    ttk.Label(frame, text="Rotation angle (-360 to 360 degrees):").grid(
+        row=0, column=0, sticky="w", pady=(0, 6)
+    )
+    ttk.Entry(frame, textvariable=angle_var, width=12).grid(
+        row=0, column=1, sticky="e", padx=(12, 0), pady=(0, 6)
+    )
+    ttk.Label(frame, text="Detection threshold (0 to 1):").grid(
+        row=1, column=0, sticky="w"
+    )
+    ttk.Entry(frame, textvariable=threshold_var, width=12).grid(
+        row=1, column=1, sticky="e", padx=(12, 0)
+    )
+    error_label = ttk.Label(frame, text="", foreground="red")
+    error_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+    def confirm() -> None:
+        try:
+            angle = float(angle_var.get())
+            threshold = float(threshold_var.get())
+        except ValueError:
+            error_label.configure(text="Enter valid numbers for both values.")
+            return
+        if not -360 <= angle <= 360:
+            error_label.configure(text="Angle must be between -360 and 360 degrees.")
+            return
+        if not 0 <= threshold <= 1:
+            error_label.configure(text="Threshold must be between 0 and 1.")
+            return
+        result["value"] = angle, threshold
+        window.destroy()
+
+    def cancel() -> None:
+        window.destroy()
+
+    ttk.Button(buttons, text="OK", command=confirm).pack(side="right")
+    ttk.Button(buttons, text="Cancel", command=cancel).pack(side="right", padx=(0, 6))
+    window.protocol("WM_DELETE_WINDOW", cancel)
+    window.grab_set()
+    window.wait_window()
+    return result["value"]
 
 
 def ask_int(
