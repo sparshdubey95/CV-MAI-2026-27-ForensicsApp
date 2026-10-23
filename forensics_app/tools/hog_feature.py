@@ -24,7 +24,7 @@ import skimage.feature as feature
 
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
-from .dialogs import show_error
+from .dialogs import ask_hog_parameters, show_error
 
 
 # ── Algorithmic Functions ───────────────────────────────────────────────────
@@ -192,29 +192,41 @@ def compute_hog_comparison_figure(
 # ── Tool Class ───────────────────────────────────────────────────────────────
 
 class HOGFeatureTool(ForensicsTool):
-    """Set 4.3: Render the fixed multi-orientation comparison from Slide 4."""
+    """Set 4.3: Render configurable multi-orientation HOG feature visualizations."""
 
     tool_id = "hog_feature"
     title = "HOG feature extraction"
     category = "Set 4: Feature & HOG Detection"
-    description = "Extract HOG features and display the 4-panel comparison from Slide 4."
+    description = "Configurable HOG feature extraction and dynamic multi-orientation visualization."
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         assert document.current is not None
 
+        params = ask_hog_parameters(
+            parent,
+            initial_orientations="2, 4, 9",
+            initial_pixels_per_cell="6, 6",
+            initial_cells_per_block="3, 3",
+        )
+        if params is None:
+            return None
+
+        orientations_list, pixels_per_cell, cells_per_block = params
+
         try:
             output_image, details = compute_hog_comparison_figure(
                 document.current,
-                orientations_list=[2, 4, 9],
-                pixels_per_cell=(6, 6),
-                cells_per_block=(3, 3),
+                orientations_list=orientations_list,
+                pixels_per_cell=pixels_per_cell,
+                cells_per_block=cells_per_block,
             )
         except ValueError as err:
             show_error(parent, "HOG Error", str(err))
             return None
 
+        oris_text = ", ".join(str(o) for o in orientations_list)
         return ToolResult(
             image=output_image,
-            message="Compared HOG visualizations for 2, 4, and 9 orientations.",
+            message=f"Generated HOG visualizations for orientations: {oris_text} (cell={pixels_per_cell[0]}x{pixels_per_cell[1]}, block={cells_per_block[0]}x{cells_per_block[1]}).",
             details=details,
         )

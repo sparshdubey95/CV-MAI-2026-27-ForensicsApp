@@ -101,6 +101,110 @@ def ask_float(
     return simpledialog.askfloat(title, prompt, **kwargs)
 
 
+def ask_hog_parameters(
+    parent: tk.Misc | None,
+    initial_orientations: str = "2, 4, 9",
+    initial_pixels_per_cell: str = "6, 6",
+    initial_cells_per_block: str = "3, 3",
+) -> tuple[list[int], tuple[int, int], tuple[int, int]] | None:
+    """Prompt the user for HOG parameters: orientations, pixels_per_cell, and cells_per_block.
+
+    In headless/test mode (parent is None), returns the parsed initial values.
+    """
+    def _parse(
+        ori_str: str, ppc_str: str, cpb_str: str
+    ) -> tuple[list[int], tuple[int, int], tuple[int, int]]:
+        oris = [int(x.strip()) for x in ori_str.split(",") if x.strip()]
+        if not oris:
+            raise ValueError("At least one orientation value is required.")
+        if any(o < 1 for o in oris):
+            raise ValueError("All orientations must be positive integers.")
+
+        ppc_parts = [int(x.strip()) for x in ppc_str.replace("x", ",").split(",") if x.strip()]
+        if len(ppc_parts) == 1:
+            ppc = (ppc_parts[0], ppc_parts[0])
+        elif len(ppc_parts) == 2:
+            ppc = (ppc_parts[0], ppc_parts[1])
+        else:
+            raise ValueError("Pixels per cell must be 1 or 2 positive integers (e.g. '6, 6' or '8').")
+        if ppc[0] < 1 or ppc[1] < 1:
+            raise ValueError("Pixels per cell dimensions must be positive integers.")
+
+        cpb_parts = [int(x.strip()) for x in cpb_str.replace("x", ",").split(",") if x.strip()]
+        if len(cpb_parts) == 1:
+            cpb = (cpb_parts[0], cpb_parts[0])
+        elif len(cpb_parts) == 2:
+            cpb = (cpb_parts[0], cpb_parts[1])
+        else:
+            raise ValueError("Cells per block must be 1 or 2 positive integers (e.g. '3, 3' or '2').")
+        if cpb[0] < 1 or cpb[1] < 1:
+            raise ValueError("Cells per block dimensions must be positive integers.")
+
+        return oris, ppc, cpb
+
+    if parent is None:
+        return _parse(initial_orientations, initial_pixels_per_cell, initial_cells_per_block)
+
+    result: dict[str, tuple[list[int], tuple[int, int], tuple[int, int]] | None] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("HOG Feature Parameters")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=14)
+    frame.pack(fill="both", expand=True)
+
+    ori_var = tk.StringVar(value=initial_orientations)
+    ppc_var = tk.StringVar(value=initial_pixels_per_cell)
+    cpb_var = tk.StringVar(value=initial_cells_per_block)
+
+    ttk.Label(frame, text="Orientations (comma-separated, e.g. 2, 4, 9):").grid(
+        row=0, column=0, sticky="w", pady=(0, 6)
+    )
+    ttk.Entry(frame, textvariable=ori_var, width=16).grid(
+        row=0, column=1, sticky="e", padx=(12, 0), pady=(0, 6)
+    )
+
+    ttk.Label(frame, text="Pixels per cell (e.g. 6, 6 or 8, 8):").grid(
+        row=1, column=0, sticky="w", pady=(0, 6)
+    )
+    ttk.Entry(frame, textvariable=ppc_var, width=16).grid(
+        row=1, column=1, sticky="e", padx=(12, 0), pady=(0, 6)
+    )
+
+    ttk.Label(frame, text="Cells per block (e.g. 3, 3 or 2, 2):").grid(
+        row=2, column=0, sticky="w"
+    )
+    ttk.Entry(frame, textvariable=cpb_var, width=16).grid(
+        row=2, column=1, sticky="e", padx=(12, 0)
+    )
+
+    error_label = ttk.Label(frame, text="", foreground="red")
+    error_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+    def confirm() -> None:
+        try:
+            parsed = _parse(ori_var.get(), ppc_var.get(), cpb_var.get())
+        except ValueError as err:
+            error_label.configure(text=str(err))
+            return
+        result["value"] = parsed
+        window.destroy()
+
+    def cancel() -> None:
+        window.destroy()
+
+    ttk.Button(buttons, text="OK", command=confirm).pack(side="right")
+    ttk.Button(buttons, text="Cancel", command=cancel).pack(side="right", padx=(0, 6))
+    window.protocol("WM_DELETE_WINDOW", cancel)
+    window.grab_set()
+    window.wait_window()
+    return result["value"]
+
+
 def ask_template_matching_parameters(
     parent: tk.Misc | None,
     initial_angle: float = 0.0,
