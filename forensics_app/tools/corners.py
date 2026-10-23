@@ -7,6 +7,20 @@ import tkinter as tk
 
 import matplotlib
 matplotlib.use("Agg")
+
+# A corner is useful because it is often a distinctive location that can be detected again in another image.
+# Corner detection is therefore useful in image matching, object recognition, image registration, tracking
+
+# FAST examines pixels on a circle around a candidate centre pixel. It checks whether a sufficiently long
+# sequence of neighbouring pixels is consistently brighter or darker than the centre by a specified intensity threshold.
+
+# Harris examines how image intensity changes around a pixel in different directions.
+# It uses local image gradients to calculate a corner-response score. A strong response in two directions suggests a corner.
+# The algorithm distinguishes flat regions, edges, and corners using this response.
+
+
+# The important idea is that detecting a corner response and selecting the final corner coordinates are two separate operations
+
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
@@ -16,7 +30,11 @@ from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
 from .dialogs import ask_choice, ask_float, ask_int, show_error
 
-
+# Converts any input image (whether a PIL Image or a NumPy array)
+# into a standardized, single-channel floating-point grayscale image.
+# Why convert to grayscale?
+# Corner detection algorithms analyze intensity gradients and luminance changes,
+# so color information is unnecessary and computationally redundant.
 def _grayscale(image: Image.Image | np.ndarray) -> np.ndarray:
     array = np.asarray(image)
     if array.ndim == 3:
@@ -24,6 +42,8 @@ def _grayscale(image: Image.Image | np.ndarray) -> np.ndarray:
     return util.img_as_float(array)
 
 
+# Computes the corner response map using either the FAST or Harris algorithm,
+# and then extracts discrete corner coordinates as (row, column) pairs.
 def detect_corners(
     image: Image.Image | np.ndarray,
     algorithm: str = "FAST",
@@ -33,6 +53,12 @@ def detect_corners(
     """Return peak corner coordinates as (row, column) pairs."""
     algorithm_name = algorithm.upper()
     gray = _grayscale(image)
+
+    #What is the role of min_distance and threshold_rel?
+    # min_distance ensures corners aren't clustered too closely together by
+    # enforcing a minimum spatial separation (Non-Maximum Suppression),
+    # while threshold_rel acts as a sensitivity cutoff relative to the maximum response value in the image.
+
     if min_distance < 1:
         raise ValueError("min_distance must be at least 1.")
     if not 0 <= threshold_rel <= 1:
@@ -50,6 +76,8 @@ def detect_corners(
     )
 
 
+# Generates a visual representation of the grayscale image
+# with the detected corners overlaid as hollow red circles, returning it as a processed PIL Image.
 def render_corners(
     image: Image.Image | np.ndarray,
     corners: np.ndarray,
