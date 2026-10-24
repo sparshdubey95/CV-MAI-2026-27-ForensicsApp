@@ -7,6 +7,11 @@ This module implements:
              displaying a 2-panel figure: Rotated template and Thresholded image (dimmed background
              with red detections).
 """
+# We use NCC instead of raw pixel subtraction because
+# NCC is resilient to lighting changes; even if the image is brighter
+# or darker overall, the mathematical correlation pattern remains
+# consistent
+
 
 from __future__ import annotations
 
@@ -61,7 +66,7 @@ def to_gray_float(image: Image.Image | np.ndarray) -> np.ndarray:
         return arr.astype(np.float64) / 255.0
     return arr.astype(np.float64)
 
-
+# Uses skimage.feature.match_template to slide the template over the search image.
 def compute_ncc_map(
     image: Image.Image | np.ndarray,
     template: Image.Image | np.ndarray,
@@ -210,7 +215,12 @@ def render_template_matching_figure(
 
 
 # ── Template Matching Computation ───────────────────────────────────────────
-
+# What it does:
+# Rotates the template.
+# Runs the NCC map calculation.
+# Finds the absolute best match (np.argmax) and its score (peak_val).
+# Creates a threshold mask (corr_map >= threshold) to find all locations that meet your quality standard.
+# Visual effect: It dims the original search image down to 40% brightness (* 0.4) and paints all passing match zones in bright red so they instantly pop out to the user.
 def match_template_configured(
     image: Image.Image,
     template: Image.Image,

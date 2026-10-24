@@ -1,5 +1,10 @@
 """Folder-based descriptor image lookup (Set 5.4)."""
-
+# The Big Picture: What Does This Tool Do?
+# Scans a Folder: It looks inside a user-selected folder and filters for valid image files (like .png, .jpg, etc.).
+# Extracts Reference Features: It computes the feature descriptors for your main reference image once so it doesn’t have to recalculate it repeatedly.
+# The Search Loop: It opens each candidate image in the folder one by one, extracts its features, and matches them against the reference image.
+# Finds the Winner: It counts how many matches each image gets and keeps track of the highest score.
+# Draws the Final Output: Once it finds the best match, it uses the drawing function from the previous script to show you the side-by-side comparison lines.
 from __future__ import annotations
 
 import tkinter as tk
@@ -18,7 +23,12 @@ from .feature_matching import render_matches
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
-
+# What it does:
+# Finds all valid images in the target folder using folder_path.iterdir(). If the folder is empty, it raises an error.
+# Extracts descriptors from the reference image once (saving precious processing time).
+# Loops through every single candidate image in a for loop.
+# Compares the candidate's descriptors to the reference descriptors using feature.match_descriptors(...) (using Hamming for ORB or Euclidean for SIFT).
+# It uses a max-tracking variable (best_matches). If a candidate has more matches than the current record-holder, it replaces it as the new winner (best_path).
 def lookup_closest_image(
     reference_image: Image.Image | np.ndarray,
     folder: str | Path,
@@ -110,6 +120,7 @@ class ImageLookupTool(ForensicsTool):
                 f"Reference: {ref_name} <---> Best: {best_path.name} "
                 f"(matches={len(matches)})"
             )
+            # Reuses render_matches (imported from the previous file) to draw the lines between the reference image and the winning folder image.
             output = render_matches(
                 document.current,
                 ref_keypoints,

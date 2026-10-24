@@ -7,6 +7,44 @@ This module implements:
   - Configurable orientation bins, pixels_per_cell (e.g. 6x6 or 8x8),
     and cells_per_block (e.g. 3x3 or 2x2).
 """
+# The Big Picture: What Does This Tool Do?
+# Calculates Gradients: It measures where and how sharply pixel brightness changes (edges and lines).
+# Groups into Cells & Blocks: It breaks the image into small grids ("cells") and groups them into
+# normalization areas ("blocks") to make the detection immune to shadows and lighting changes.
+# Creates a Multi-Orientation Comparison: It generates a side-by-side comparison showing what the image
+# looks like when analyzed with different orientation settings (e.g., 2, 4, and 9 orientation bins).
+
+
+
+# orientations (e.g., 2, 4, 9)
+# What it means: How many directional "bins" (angles) the gradient directions are sorted into.
+# For example, orientations=9 splits a 180-degree semicircle into 9 equal slices of 20 degrees each.
+# Impact of Low Values (e.g., 2):
+# What happens: Only groups gradients into two broad categories (e.g., roughly horizontal vs. vertical).
+# Effect: Extremely simple, coarse representation, smaller descriptor size, but misses fine curves and detailed contours.
+# Impact of High Values (e.g., 9 or 16):
+# What happens: Highly sensitive to subtle angle changes.
+# Effect: Captures complex shapes and fine details accurately, but results in a massive descriptor vector size and requires more computing power.
+
+# pixels_per_cell (e.g., (6, 6) or (8, 8))
+# What it means: The spatial resolution of the local grid. Pixels are grouped into small cells of this size, and a gradient histogram is calculated for each cell.
+# Impact of Low Values (e.g., (4, 4)):
+# What happens: Tiny cells mean high spatial resolution.
+# Effect: Captures sharp local texture details, wrinkles, or small patterns, but creates a massive amount of data and makes the algorithm vulnerable to small pixel shifts (noise).
+# Impact of High Values (e.g., (16, 16)):
+# What happens: Large cells group many pixels together.
+# Effect: Smooths out local texture noise, focuses purely on macro structures (like the general outline of a body or car), and shrinks the descriptor size.
+
+
+# cells_per_block (e.g., (2, 2) or (3, 3))
+# What it means: How many cells are grouped together into a "block" for contrast normalization.
+# Normalization divides local gradient values by the overall energy of the block to eliminate the impact of heavy shadows or bright lighting.
+# Impact of Low Values (e.g., (1, 1) or (2, 2)):
+# What happens: Normalizes over a tight local area.
+# Effect: Keeps localized contrast sharp, but can make the algorithm struggle if one side of the image has a harsh shadow.
+# Impact of High Values (e.g., (3, 3)):
+# What happens: Normalizes across a broader neighborhood of cells.
+# Effect: Highly robust against uneven lighting and heavy shadows, but can overly smooth out sharp local edge variations.
 
 from __future__ import annotations
 
@@ -28,6 +66,13 @@ from .dialogs import ask_hog_parameters, show_error
 
 
 # ── Algorithmic Functions ───────────────────────────────────────────────────
+
+
+# What it does: Uses skimage.feature.hog to extract the numerical descriptor vector (fd) and a visual representation (hog_pil).
+# Checks if the image is too small for the requested cell/block size.
+# Strips out the alpha channel if the image has transparency (keeping only RGB/grayscale).
+# Computes the HOG features with visualize=True.
+# Rescales the contrast using exposure.rescale_intensity so the faint gradient lines become bright, crisp, and clearly visible to the human eye.
 
 def compute_hog(
     image: Image.Image | np.ndarray,
