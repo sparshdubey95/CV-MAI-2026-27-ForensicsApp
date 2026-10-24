@@ -10,6 +10,26 @@ This module implements:
     with red bounding boxes marking the best matches in each panel.
 """
 
+# What Does This Tool Do?
+# Finds a Template: It automatically looks for an official reference template file (person_template.bmp)
+# The Sliding Window: It takes this template descriptor and slides it across the search image row-by-row
+# and column-by-column (using a defined step_size).
+# Calculates Two Scores: At every single window position, it extracts the HOG features of that patch and compares it
+# to the template using two different mathematical metrics (Euclidean distance and Dot Product).
+# Draws the Slide 5 3-Panel Figure: It highlights the best match for each metric by drawing a bright red bounding box
+# on two separate panels, resulting in a clean 3-panel view
+
+
+# 1. Euclidean Distance:
+# What it means: It measures the straight-line geometric distance between two descriptor vectors in a multidimensional space.
+# How to interpret it: Lower is better. If the distance is close to 0.0, it means the patch's gradient histogram is almost identical to the template.
+
+# 2. Dot Product:
+# What it means: It measures the alignment and magnitude overlap between the two vectors.
+# How to interpret it: Higher is better. If the dot product score is high,
+# it means the gradient orientations point in the same directions with strong matching energy.
+
+
 from __future__ import annotations
 
 import io
@@ -33,6 +53,9 @@ from .template_matching import draw_bounding_box
 
 # ── Helper: Locate course assignment person template ────────────────────────
 
+# These helper functions handle finding the target template. First, they check the folder
+# where your image is saved to see if an official person_template.bmp file exists.
+# If it doesn't, it prompts you to select one or smartly crops the center of your current image as a fallback.
 def find_default_person_template(
     document_path: str | None = None,
 ) -> Image.Image | None:
@@ -88,6 +111,15 @@ def acquire_person_template(
 
 
 # ── Algorithmic Functions ───────────────────────────────────────────────────
+# detect_person_hog(...) — The Sliding Window Engine
+# This is the core heavy-lifter function containing the main logic:
+# Extracts Template Features: Calculates the HOG descriptor for the template person once.
+# The Nested Loop: Slides across the image using a step_size (e.g., jumping 16 pixels at a time to speed things up).
+# Patch Comparison: For every window position, it extracts the patch's HOG descriptor and evaluates it:
+# It calculates the Euclidean distance and appends it to a list.
+# It calculates the Dot product similarity and appends it to that list.
+# Finding the Optimal Spot: It finds the minimum Euclidean distance (np.argmin) and the maximum dot product similarity (np.argmax).
+# Plotting: Generates the 3-panel Matplotlib figure with red Rectangle bounding boxes marking the winning locations.
 
 def detect_person_hog(
     image: Image.Image,
