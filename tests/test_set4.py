@@ -87,7 +87,7 @@ class NormalizedCrossCorrTests(unittest.TestCase):
         self.assertEqual(rendered.mode, "L")
         self.assertEqual(rendered.size, (64, 64))
 
-    def test_render_ncc_figure_has_three_panels(self) -> None:
+    def test_render_ncc_figure_has_four_panels(self) -> None:
         corr_map = compute_ncc_map(self.image, self.template, pad_input=True)
         import matplotlib.pyplot as plt
         with patch(
@@ -95,7 +95,7 @@ class NormalizedCrossCorrTests(unittest.TestCase):
             wraps=plt.subplots,
         ) as subplots:
             fig_img = render_ncc_figure(self.image, self.template, corr_map)
-            self.assertEqual(subplots.call_args.args[:2], (1, 3))
+            self.assertEqual(subplots.call_args.args[:2], (1, 4))
         self.assertIsInstance(fig_img, Image.Image)
         self.assertEqual(fig_img.mode, "RGB")
         self.assertGreater(fig_img.width, 100)

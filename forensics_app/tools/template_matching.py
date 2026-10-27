@@ -2,7 +2,7 @@
 
 This module implements:
   - Set 4.1: Normalized cross-correlation (NCC) using skimage.feature.match_template.
-             Displays a 3-panel figure: Original image, Template, and NCC image.
+             Displays a 4-panel figure: Original image, Template, NCC image, and Thresholded NCC.
   - Set 4.2: Template matching with configurable rotation angle and detection threshold,
              displaying a 2-panel figure: Rotated template and Thresholded image (dimmed background
              with red detections).
@@ -23,7 +23,7 @@ import matplotlib
 matplotlib.use("Agg")  # Off-screen backend for rendering plots
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import skimage.color as color
 import skimage.feature as feature
 import skimage.transform as transform
@@ -156,21 +156,51 @@ def render_ncc_figure(
     image: Image.Image | np.ndarray,
     template: Image.Image | np.ndarray,
     corr_map: np.ndarray,
+    threshold: float = 0.8,
 ) -> Image.Image:
-    """Render the Slide 1 comparison: original image, template, and NCC image."""
+    """Render 4-panel comparison: original, template, NCC map, and thresholded NCC."""
     original = np.asarray(image.convert("RGB")) if isinstance(image, Image.Image) else image
     displayed_template = (
         np.asarray(template.convert("RGB")) if isinstance(template, Image.Image) else template
     )
     clean_corr = np.nan_to_num(corr_map, nan=0.0)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=100)
+    # -- Build thresholded overlay (panel 4) --
+    gray_img = to_gray_float(image)
+    tmpl_h, tmpl_w = to_gray_float(template).shape[:2]
+    ih, iw = gray_img.shape[:2]
+
+    # Dimmed background at 40% brightness
+    overlay = color.gray2rgb(gray_img) * 0.4
+
+    # Find distinct detection peaks via non-maximum suppression
+    min_dist = max(1, min(tmpl_h, tmpl_w) // 2)
+    peaks = feature.peak_local_max(
+        clean_corr, min_distance=min_dist, threshold_abs=threshold,
+    )
+
+    # Render compact circular detection markers, matching the red-point style
+    # used by Template Matching without coloring the full thresholded regions.
+    thresholded_uint8 = np.clip(overlay * 255.0, 0, 255).astype(np.uint8)
+    thresholded_image = Image.fromarray(thresholded_uint8, mode="RGB")
+    marker_layer = ImageDraw.Draw(thresholded_image)
+    dot_r = 2
+    for y, x in peaks:
+        marker_layer.ellipse(
+            (int(x) - dot_r, int(y) - dot_r, int(x) + dot_r, int(y) + dot_r),
+            fill=(255, 0, 0),
+        )
+
+    # -- 4-panel figure --
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5), dpi=100)
     axes[0].imshow(original, cmap="gray" if original.ndim == 2 else None)
     axes[0].set_title("Original image")
     axes[1].imshow(displayed_template, cmap="gray" if displayed_template.ndim == 2 else None)
     axes[1].set_title("Template")
     axes[2].imshow(clean_corr, cmap="gray")
     axes[2].set_title("Normalized cross-corr image")
+    axes[3].imshow(thresholded_image)
+    axes[3].set_title("Thresholded NCC (\u2265 {:.2f})".format(threshold))
 
     fig.tight_layout()
 
@@ -290,7 +320,7 @@ def match_template_configured(
 # ── ForensicsTool Classes ───────────────────────────────────────────────────
 
 class NormalizedCrossCorrTool(ForensicsTool):
-    """Set 4.1: Compute normalized cross-correlation and render the 3-panel figure."""
+    """Set 4.1: Compute normalized cross-correlation and render the 4-panel figure."""
 
     tool_id = "normalized_cross_corr"
     title = "Normalized cross-correlation"
