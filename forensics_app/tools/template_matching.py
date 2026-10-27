@@ -262,27 +262,89 @@ def match_template_configured(
     """Perform template matching with rotation, thresholding, and dimmed background display."""
     gray_img = to_gray_float(image)
     gray_tmpl = to_gray_float(template)
-
-    gray_tmpl = rotate_template(gray_tmpl, angle)
-
     ih, iw = gray_img.shape[:2]
-    th, tw = gray_tmpl.shape[:2]
-    if th > ih or tw > iw:
-        raise ValueError(
-            f"Rotated template size ({tw}x{th}) exceeds search image ({iw}x{ih})."
+
+    # Search a full turn at 5-degree intervals, also including the angle
+    # selected in the existing dialog. Resizing keeps rotated corners intact.
+    tested_angles = list(np.arange(-180.0, 180.0, 5.0))
+    tested_angles.append(float(angle))
+    tested_angles = list(dict.fromkeys(round(a, 6) for a in tested_angles))
+
+    candidates: list[tuple[float, int, int, float, np.ndarray]] = []
+    corr_map = np.zeros((ih, iw), dtype=float)
+    best_score = -np.inf
+    best_angle = float(angle)
+    best_template = gray_tmpl
+    for tested_angle in tested_angles:
+        rotated = transform.rotate(
+            gray_tmpl, tested_angle, resize=True, mode="constant", cval=0,
+            preserve_range=True,
         )
+        th, tw = rotated.shape[:2]
+        if th > ih or tw > iw:
+            continue
+        corr = np.nan_to_num(
+            feature.match_template(gray_img, rotated, pad_input=True), nan=0.0,
+        )
+        corr_map = np.maximum(corr_map, corr)
+        local_peak = float(np.max(corr))
+        if local_peak > best_score:
+            best_score = local_peak
+            best_angle = tested_angle
+            best_template = rotated
 
-    corr_map = feature.match_template(gray_img, gray_tmpl, pad_input=True)
-    corr_map = np.nan_to_num(corr_map, nan=0.0)
+        # Collect threshold-qualified local maxima; cross-angle duplicates are
+        # collapsed below using the original template's footprint.
+        min_dist = max(1, min(th, tw) // 2)
+        for y, x in feature.peak_local_max(
+            corr, min_distance=min_dist, threshold_abs=threshold,
+        ):
+            candidates.append((float(corr[y, x]), int(y), int(x), tested_angle, rotated))
 
-    peak_y, peak_x = np.unravel_index(np.argmax(corr_map), corr_map.shape)
-    peak_val = float(corr_map[peak_y, peak_x])
+    if not candidates:
+        # Keep a valid best-angle result even when the threshold rejects every
+        # location; this preserves the prior single-peak fallback behavior.
+        rotated = transform.rotate(
+            gray_tmpl, best_angle, resize=True, mode="constant", cval=0,
+            preserve_range=True,
+        )
+        th, tw = rotated.shape[:2]
+        if th > ih or tw > iw:
+            raise ValueError(
+                f"Rotated template size ({tw}x{th}) exceeds search image ({iw}x{ih})."
+            )
+        best_template = rotated
+        best_corr = np.nan_to_num(
+            feature.match_template(gray_img, rotated, pad_input=True), nan=0.0,
+        )
+        peak_y, peak_x = np.unravel_index(np.argmax(best_corr), best_corr.shape)
+        peak_val = float(best_corr[peak_y, peak_x])
+        detections = [(peak_val, int(peak_y), int(peak_x), best_angle, rotated)]
+        corr_map = best_corr
+    else:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        # Greedy non-maximum suppression across all tested rotations.
+        suppression_radius = max(1.0, min(gray_tmpl.shape[:2]) / 2.0)
+        detections = []
+        for candidate in candidates:
+            _, y, x, _, _ = candidate
+            if all(
+                (y - kept[1]) ** 2 + (x - kept[2]) ** 2 > suppression_radius ** 2
+                for kept in detections
+            ):
+                detections.append(candidate)
+        peak_val, peak_y, peak_x, best_angle, best_template = detections[0]
+        # Maximum response surface preserves the existing threshold-mask
+        # visualization while combining evidence from every tested angle.
+        peak_y, peak_x = int(peak_y), int(peak_x)
+        peak_val = float(peak_val)
 
+    th, tw = best_template.shape[:2]
     top = int(round(peak_y - th / 2.0))
     left = int(round(peak_x - tw / 2.0))
 
     matches_mask = corr_map >= threshold
-    matches_count = int(np.sum(matches_mask))
+    matches_count = len(detections)
 
     # Dimmed background (40%) with red detections
     out_float = color.gray2rgb(gray_img) * 0.4
@@ -300,6 +362,7 @@ def match_template_configured(
         "Bounding box top-left": f"({top}, {left})",
         "Template size": f"{tw} × {th}",
         "Rotation angle": f"{angle:.1f}°",
+        "Best match rotation": f"{best_angle:.1f}°",
         "Threshold": f"{threshold:.2f}",
         "Matches above threshold": matches_count,
         "Display style": "dimmed",
