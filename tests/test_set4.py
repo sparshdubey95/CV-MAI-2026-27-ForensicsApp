@@ -87,7 +87,7 @@ class NormalizedCrossCorrTests(unittest.TestCase):
         self.assertEqual(rendered.mode, "L")
         self.assertEqual(rendered.size, (64, 64))
 
-    def test_render_ncc_figure_has_three_panels(self) -> None:
+    def test_render_ncc_figure_has_four_panels(self) -> None:
         corr_map = compute_ncc_map(self.image, self.template, pad_input=True)
         import matplotlib.pyplot as plt
         with patch(
@@ -95,7 +95,7 @@ class NormalizedCrossCorrTests(unittest.TestCase):
             wraps=plt.subplots,
         ) as subplots:
             fig_img = render_ncc_figure(self.image, self.template, corr_map)
-            self.assertEqual(subplots.call_args.args[:2], (1, 3))
+            self.assertEqual(subplots.call_args.args[:2], (1, 4))
         self.assertIsInstance(fig_img, Image.Image)
         self.assertEqual(fig_img.mode, "RGB")
         self.assertGreater(fig_img.width, 100)
@@ -309,6 +309,57 @@ class HOGFeatureTests(unittest.TestCase):
         self.assertEqual(result.details["Orientations"], 9)
         self.assertEqual(result.details["Pixels per cell"], "6 × 6")
         self.assertEqual(result.details["Cells per block"], "3 × 3")
+
+    def test_hog_feature_tool_configured_params(self) -> None:
+        doc = ImageDocument()
+        doc.current = self.image
+        tool = HOGFeatureTool()
+        with patch(
+            "forensics_app.tools.hog_feature.ask_hog_parameters",
+            return_value=([4, 8], (8, 8), (2, 2)),
+        ):
+            result = tool.run(None, doc)
+            self.assertIsNotNone(result)
+            self.assertIsNotNone(result.image)
+            self.assertEqual(result.details["Orientations"], 8)
+            self.assertEqual(result.details["Pixels per cell"], "8 × 8")
+            self.assertEqual(result.details["Cells per block"], "2 × 2")
+            self.assertIn("Descriptor length (ori=4)", result.details)
+            self.assertIn("Descriptor length (ori=8)", result.details)
+            self.assertNotIn("Descriptor length (ori=9)", result.details)
+
+    def test_hog_feature_tool_cancel(self) -> None:
+        doc = ImageDocument()
+        doc.current = self.image
+        tool = HOGFeatureTool()
+        with patch("forensics_app.tools.hog_feature.ask_hog_parameters", return_value=None):
+            result = tool.run(None, doc)
+            self.assertIsNone(result)
+
+    def test_ask_hog_parameters_headless_defaults_and_parsing(self) -> None:
+        from forensics_app.tools.dialogs import ask_hog_parameters
+
+        # Headless default
+        params = ask_hog_parameters(None)
+        self.assertEqual(params, ([2, 4, 9], (6, 6), (3, 3)))
+
+        # Custom values parsing
+        custom = ask_hog_parameters(
+            None,
+            initial_orientations="4, 8, 12",
+            initial_pixels_per_cell="8, 8",
+            initial_cells_per_block="2, 2",
+        )
+        self.assertEqual(custom, ([4, 8, 12], (8, 8), (2, 2)))
+
+        # Single integer dimension e.g. "8" or "8x8"
+        custom2 = ask_hog_parameters(
+            None,
+            initial_orientations="6",
+            initial_pixels_per_cell="8",
+            initial_cells_per_block="2x2",
+        )
+        self.assertEqual(custom2, ([6], (8, 8), (2, 2)))
 
 
 class HOGDetectionTests(unittest.TestCase):

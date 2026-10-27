@@ -1,4 +1,21 @@
-"""ORB and SIFT feature descriptor extraction (Set 5.2)."""
+# This script implements feature detection and description using ORB (Oriented FAST and Rotated BRIEF) and
+# SIFT (Scale-Invariant Feature Transform) via scikit-image.
+
+# Keypoints: Distinctive interest points in an image (like corners, blobs, or edges)
+# that can be reliably re-located across different images.
+
+# Descriptors: A mathematical vector (signature) describing the local neighborhood
+# around each keypoint, allowing you to match the same point across different rotations, scales, or lighting conditions.
+
+
+# n_octaves: It determines how many times the image is shrunk down to look for larger and larger patterns.
+# Each octave represents a doubling of scale (effectively halving the image resolution in width and height).
+# Higher values allow the algorithm to detect larger, coarser features (like a whole building or a large object viewed from far away).
+# Lower values restrict the search to finer, smaller details in the original image resolution.
+
+# n_scales: Determines how many intermediate blurred versions (Gaussian scale levels) are computed within each octave before down sampling to the next octave.
+# Think of this as zooming out of a photo while gradually adding different amounts of blur to see what details stay visible.
+# High Values (Lots of blur steps per octave), Low Values (Fewer blur steps per octave)
 
 from __future__ import annotations
 
@@ -17,7 +34,10 @@ from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
 from .dialogs import ask_choice, ask_float, ask_int, show_error
 
-
+# Why is color information discarded here? Feature descriptors rely
+# on intensity gradients and structural patterns, making
+# luminance/grayscale data sufficient while reducing computational
+# complexity.
 def to_grayscale(image: Image.Image | np.ndarray) -> np.ndarray:
     """Convert a PIL or NumPy image to grayscale float values in [0, 1]."""
     array = np.asarray(image)
@@ -25,7 +45,13 @@ def to_grayscale(image: Image.Image | np.ndarray) -> np.ndarray:
         array = color.rgb2gray(array[..., :3])
     return util.img_as_float(array)
 
+# Initializes either an ORB or SIFT detector based on user configuration,
+# extracts keypoints and their corresponding descriptors, and returns them
+# as NumPy arrays.
 
+# What is the difference between ORB and SIFT? SIFT is rotation- and scale-invariant
+# and uses floating-point descriptors (making it robust but computationally heavy/patented
+# historically), whereas ORB is a fast, free alternative that uses oriented FAST keypoints and BRIEF binary descriptors.
 def extract_keypoints(
     image: Image.Image | np.ndarray,
     algorithm: str = "ORB",
@@ -57,7 +83,7 @@ def extract_keypoints(
         raise ValueError(f"{algorithm_name} could not find descriptors: {error}") from error
     return detector.keypoints, detector.descriptors
 
-
+# Renders the grayscale image with the extracted keypoint locations marked as hollow red circles.
 def render_keypoints(
     image: Image.Image | np.ndarray,
     keypoints: np.ndarray,

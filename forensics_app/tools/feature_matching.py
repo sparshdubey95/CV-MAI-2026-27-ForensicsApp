@@ -1,4 +1,8 @@
 """Two-image ORB/SIFT descriptor matching (Set 5.3)."""
+# It takes two images—a reference/current image and a user-selected second image,
+# extracts local distinctive features using either ORB or SIFT algorithms,
+# finds matching descriptor pairs between them, and visually renders a side-by-side comparison plot showing the correspondence lines.
+
 
 from __future__ import annotations
 
@@ -19,6 +23,9 @@ from .base import ForensicsTool, ToolResult
 from .dialogs import ask_choice, ask_image_file, show_error
 from .feature_descriptors import extract_keypoints, to_grayscale
 
+# Extracts keypoints and descriptors from both images and computes the matches.
+# For ORB, it uses the Hamming distance (since ORB uses binary fingerprints).
+# For SIFT, it uses the Euclidean distance (straight-line distance between numerical vectors).
 
 def match_two_images(
     image1: Image.Image | np.ndarray,
@@ -45,7 +52,7 @@ def match_two_images(
     matches = feature.match_descriptors(descriptors1, descriptors2, metric=metric)
     return matches, keypoints1, keypoints2
 
-
+# This function turns raw mathematical data into a picture
 def render_matches(
     image1: Image.Image | np.ndarray,
     keypoints1: np.ndarray,

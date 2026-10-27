@@ -2,11 +2,16 @@
 
 This module implements:
   - Set 4.1: Normalized cross-correlation (NCC) using skimage.feature.match_template.
-             Displays a 3-panel figure: Original image, Template, and NCC image.
+             Displays a 4-panel figure: Original image, Template, NCC image, and Thresholded NCC.
   - Set 4.2: Template matching with configurable rotation angle and detection threshold,
              displaying a 2-panel figure: Rotated template and Thresholded image (dimmed background
              with red detections).
 """
+# We use NCC instead of raw pixel subtraction because
+# NCC is resilient to lighting changes; even if the image is brighter
+# or darker overall, the mathematical correlation pattern remains
+# consistent
+
 
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ import matplotlib
 matplotlib.use("Agg")  # Off-screen backend for rendering plots
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import skimage.color as color
 import skimage.feature as feature
 import skimage.transform as transform
@@ -61,7 +66,7 @@ def to_gray_float(image: Image.Image | np.ndarray) -> np.ndarray:
         return arr.astype(np.float64) / 255.0
     return arr.astype(np.float64)
 
-
+# Uses skimage.feature.match_template to slide the template over the search image.
 def compute_ncc_map(
     image: Image.Image | np.ndarray,
     template: Image.Image | np.ndarray,
@@ -151,21 +156,51 @@ def render_ncc_figure(
     image: Image.Image | np.ndarray,
     template: Image.Image | np.ndarray,
     corr_map: np.ndarray,
+    threshold: float = 0.8,
 ) -> Image.Image:
-    """Render the Slide 1 comparison: original image, template, and NCC image."""
+    """Render 4-panel comparison: original, template, NCC map, and thresholded NCC."""
     original = np.asarray(image.convert("RGB")) if isinstance(image, Image.Image) else image
     displayed_template = (
         np.asarray(template.convert("RGB")) if isinstance(template, Image.Image) else template
     )
     clean_corr = np.nan_to_num(corr_map, nan=0.0)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=100)
+    # -- Build thresholded overlay (panel 4) --
+    gray_img = to_gray_float(image)
+    tmpl_h, tmpl_w = to_gray_float(template).shape[:2]
+    ih, iw = gray_img.shape[:2]
+
+    # Dimmed background at 40% brightness
+    overlay = color.gray2rgb(gray_img) * 0.4
+
+    # Find distinct detection peaks via non-maximum suppression
+    min_dist = max(1, min(tmpl_h, tmpl_w) // 2)
+    peaks = feature.peak_local_max(
+        clean_corr, min_distance=min_dist, threshold_abs=threshold,
+    )
+
+    # Render compact circular detection markers, matching the red-point style
+    # used by Template Matching without coloring the full thresholded regions.
+    thresholded_uint8 = np.clip(overlay * 255.0, 0, 255).astype(np.uint8)
+    thresholded_image = Image.fromarray(thresholded_uint8, mode="RGB")
+    marker_layer = ImageDraw.Draw(thresholded_image)
+    dot_r = 2
+    for y, x in peaks:
+        marker_layer.ellipse(
+            (int(x) - dot_r, int(y) - dot_r, int(x) + dot_r, int(y) + dot_r),
+            fill=(255, 0, 0),
+        )
+
+    # -- 4-panel figure --
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5), dpi=100)
     axes[0].imshow(original, cmap="gray" if original.ndim == 2 else None)
     axes[0].set_title("Original image")
     axes[1].imshow(displayed_template, cmap="gray" if displayed_template.ndim == 2 else None)
     axes[1].set_title("Template")
     axes[2].imshow(clean_corr, cmap="gray")
     axes[2].set_title("Normalized cross-corr image")
+    axes[3].imshow(thresholded_image)
+    axes[3].set_title("Thresholded NCC (\u2265 {:.2f})".format(threshold))
 
     fig.tight_layout()
 
@@ -210,7 +245,12 @@ def render_template_matching_figure(
 
 
 # ── Template Matching Computation ───────────────────────────────────────────
-
+# What it does:
+# Rotates the template.
+# Runs the NCC map calculation.
+# Finds the absolute best match (np.argmax) and its score (peak_val).
+# Creates a threshold mask (corr_map >= threshold) to find all locations that meet your quality standard.
+# Visual effect: It dims the original search image down to 40% brightness (* 0.4) and paints all passing match zones in bright red so they instantly pop out to the user.
 def match_template_configured(
     image: Image.Image,
     template: Image.Image,
@@ -222,27 +262,89 @@ def match_template_configured(
     """Perform template matching with rotation, thresholding, and dimmed background display."""
     gray_img = to_gray_float(image)
     gray_tmpl = to_gray_float(template)
-
-    gray_tmpl = rotate_template(gray_tmpl, angle)
-
     ih, iw = gray_img.shape[:2]
-    th, tw = gray_tmpl.shape[:2]
-    if th > ih or tw > iw:
-        raise ValueError(
-            f"Rotated template size ({tw}x{th}) exceeds search image ({iw}x{ih})."
+
+    # Search a full turn at 5-degree intervals, also including the angle
+    # selected in the existing dialog. Resizing keeps rotated corners intact.
+    tested_angles = list(np.arange(-180.0, 180.0, 5.0))
+    tested_angles.append(float(angle))
+    tested_angles = list(dict.fromkeys(round(a, 6) for a in tested_angles))
+
+    candidates: list[tuple[float, int, int, float, np.ndarray]] = []
+    corr_map = np.zeros((ih, iw), dtype=float)
+    best_score = -np.inf
+    best_angle = float(angle)
+    best_template = gray_tmpl
+    for tested_angle in tested_angles:
+        rotated = transform.rotate(
+            gray_tmpl, tested_angle, resize=True, mode="constant", cval=0,
+            preserve_range=True,
         )
+        th, tw = rotated.shape[:2]
+        if th > ih or tw > iw:
+            continue
+        corr = np.nan_to_num(
+            feature.match_template(gray_img, rotated, pad_input=True), nan=0.0,
+        )
+        corr_map = np.maximum(corr_map, corr)
+        local_peak = float(np.max(corr))
+        if local_peak > best_score:
+            best_score = local_peak
+            best_angle = tested_angle
+            best_template = rotated
 
-    corr_map = feature.match_template(gray_img, gray_tmpl, pad_input=True)
-    corr_map = np.nan_to_num(corr_map, nan=0.0)
+        # Collect threshold-qualified local maxima; cross-angle duplicates are
+        # collapsed below using the original template's footprint.
+        min_dist = max(1, min(th, tw) // 2)
+        for y, x in feature.peak_local_max(
+            corr, min_distance=min_dist, threshold_abs=threshold,
+        ):
+            candidates.append((float(corr[y, x]), int(y), int(x), tested_angle, rotated))
 
-    peak_y, peak_x = np.unravel_index(np.argmax(corr_map), corr_map.shape)
-    peak_val = float(corr_map[peak_y, peak_x])
+    if not candidates:
+        # Keep a valid best-angle result even when the threshold rejects every
+        # location; this preserves the prior single-peak fallback behavior.
+        rotated = transform.rotate(
+            gray_tmpl, best_angle, resize=True, mode="constant", cval=0,
+            preserve_range=True,
+        )
+        th, tw = rotated.shape[:2]
+        if th > ih or tw > iw:
+            raise ValueError(
+                f"Rotated template size ({tw}x{th}) exceeds search image ({iw}x{ih})."
+            )
+        best_template = rotated
+        best_corr = np.nan_to_num(
+            feature.match_template(gray_img, rotated, pad_input=True), nan=0.0,
+        )
+        peak_y, peak_x = np.unravel_index(np.argmax(best_corr), best_corr.shape)
+        peak_val = float(best_corr[peak_y, peak_x])
+        detections = [(peak_val, int(peak_y), int(peak_x), best_angle, rotated)]
+        corr_map = best_corr
+    else:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        # Greedy non-maximum suppression across all tested rotations.
+        suppression_radius = max(1.0, min(gray_tmpl.shape[:2]) / 2.0)
+        detections = []
+        for candidate in candidates:
+            _, y, x, _, _ = candidate
+            if all(
+                (y - kept[1]) ** 2 + (x - kept[2]) ** 2 > suppression_radius ** 2
+                for kept in detections
+            ):
+                detections.append(candidate)
+        peak_val, peak_y, peak_x, best_angle, best_template = detections[0]
+        # Maximum response surface preserves the existing threshold-mask
+        # visualization while combining evidence from every tested angle.
+        peak_y, peak_x = int(peak_y), int(peak_x)
+        peak_val = float(peak_val)
 
+    th, tw = best_template.shape[:2]
     top = int(round(peak_y - th / 2.0))
     left = int(round(peak_x - tw / 2.0))
 
     matches_mask = corr_map >= threshold
-    matches_count = int(np.sum(matches_mask))
+    matches_count = len(detections)
 
     # Dimmed background (40%) with red detections
     out_float = color.gray2rgb(gray_img) * 0.4
@@ -260,6 +362,7 @@ def match_template_configured(
         "Bounding box top-left": f"({top}, {left})",
         "Template size": f"{tw} × {th}",
         "Rotation angle": f"{angle:.1f}°",
+        "Best match rotation": f"{best_angle:.1f}°",
         "Threshold": f"{threshold:.2f}",
         "Matches above threshold": matches_count,
         "Display style": "dimmed",
@@ -280,7 +383,7 @@ def match_template_configured(
 # ── ForensicsTool Classes ───────────────────────────────────────────────────
 
 class NormalizedCrossCorrTool(ForensicsTool):
-    """Set 4.1: Compute normalized cross-correlation and render the 3-panel figure."""
+    """Set 4.1: Compute normalized cross-correlation and render the 4-panel figure."""
 
     tool_id = "normalized_cross_corr"
     title = "Normalized cross-correlation"
