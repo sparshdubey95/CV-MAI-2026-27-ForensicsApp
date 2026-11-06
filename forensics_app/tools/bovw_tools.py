@@ -12,6 +12,7 @@ from pathlib import Path
 import tkinter as tk
 from typing import Any
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -96,7 +97,7 @@ class BoVWCodebookTool(ForensicsTool):
 
         # 5. Build codebook using ONLY training images
         try:
-            codebook, kmeans, total_desc = build_codebook(
+            codebook, kmeans, total_desc, visual_word_patches = build_codebook(
                 train_paths=train_paths,
                 k=k_val,
                 method=method,
@@ -107,6 +108,26 @@ class BoVWCodebookTool(ForensicsTool):
             if parent is not None:
                 show_error(parent, "Codebook Training Error", str(err))
             return None
+
+        # Extract 1 representative sample image with detected keypoints per category
+        category_samples: dict[str, tuple[Image.Image, np.ndarray]] = {}
+        for c_name in class_names:
+            for p, lbl in zip(train_paths, train_labels):
+                if lbl == c_name:
+                    try:
+                        with Image.open(p) as opened:
+                            sample_img = opened.convert("RGB")
+                        gray_sample = np.array(sample_img.convert("L"), dtype=np.uint8)
+                        if method.upper() == "SIFT":
+                            det = cv2.SIFT_create(nfeatures=400)
+                        else:
+                            det = cv2.ORB_create(nfeatures=400)
+                        kps, _ = det.detectAndCompute(gray_sample, None)
+                        coords = np.array([kp.pt for kp in kps]) if kps else np.empty((0, 2))
+                        category_samples[c_name] = (sample_img, coords)
+                    except Exception:
+                        pass
+                    break
 
         # 6. Ask save location for the model bundle
         save_path = ask_save_bovw_model_file(
@@ -133,6 +154,7 @@ class BoVWCodebookTool(ForensicsTool):
                     scaler=None,
                     method=method,
                     split_info=split_info,
+                    visual_word_patches=visual_word_patches,
                 )
             except Exception as err:
                 if parent is not None:
@@ -147,15 +169,18 @@ class BoVWCodebookTool(ForensicsTool):
             "classifier": None,
             "scaler": None,
             "split_info": split_info,
+            "visual_word_patches": visual_word_patches,
             "filepath": str(save_path) if save_path else "In-memory session",
         }
         set_active_bovw_model(bundle)
         set_active_bovw_split(split_info)
 
-        # 7. Render Codebook Visualisation
+        # 7. Render Codebook Visualisation (Visual Word Patch Grid & Detected Feature Examples)
         vis_image = render_codebook_visualization(
             codebook=codebook,
             class_names=class_names,
+            visual_word_patches=visual_word_patches,
+            category_samples=category_samples,
             total_descriptors=total_desc,
         )
 
@@ -312,6 +337,7 @@ class BoVWHistogramTool(ForensicsTool):
             histogram=histogram,
             class_name=true_class,
             image_title=image_name,
+            visual_word_patches=model.get("visual_word_patches"),
         )
 
         top_word_indices = np.argsort(histogram)[::-1][:3]
@@ -448,6 +474,7 @@ class BoVWClassifierTool(ForensicsTool):
                         method=method,
                         split_info=split_info,
                         evaluation=model["evaluation"],
+                        visual_word_patches=model.get("visual_word_patches"),
                     )
                 except Exception as err:
                     if parent is not None:
@@ -568,6 +595,7 @@ class BoVWClassifierTool(ForensicsTool):
                 image_title=source_name,
                 probabilities=probabilities,
                 predicted_class=pred_class,
+                visual_word_patches=model.get("visual_word_patches"),
             )
 
             p_pred = probabilities.get(pred_class, 0.0)

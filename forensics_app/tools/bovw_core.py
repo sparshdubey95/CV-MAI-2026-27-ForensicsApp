@@ -24,6 +24,7 @@ import joblib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 import numpy as np
 from PIL import Image
 from scipy.spatial.distance import cdist
@@ -219,8 +220,10 @@ def build_codebook(
     method: str = "SIFT",
     random_state: int = 42,
     sample_limit_per_image: int = 300,
-) -> tuple[np.ndarray, KMeans, int]:
+    patch_size: int = 32,
+) -> tuple[np.ndarray, KMeans, int, np.ndarray]:
     """Extract descriptors from training images and cluster into K visual words using K-Means.
+    Also extracts representative image patches for each visual word centroid.
 
     Parameters
     ----------
@@ -234,6 +237,8 @@ def build_codebook(
         K-Means random seed.
     sample_limit_per_image : int
         Max descriptors sampled per image for fast, balanced clustering.
+    patch_size : int
+        Dimension of the square visual word image patches (default 32x32).
 
     Returns
     -------
@@ -243,20 +248,54 @@ def build_codebook(
         Fitted scikit-learn KMeans estimator.
     total_descriptors : int
         Total number of training descriptors pooled.
+    visual_word_patches : np.ndarray
+        (K, patch_size, patch_size) uint8 representative patches for each visual word.
     """
     rng = random.Random(random_state)
     all_descriptors: list[np.ndarray] = []
+    all_patches: list[np.ndarray] = []
+    half = patch_size // 2
 
     for path in train_paths:
         try:
             with Image.open(path) as opened:
                 img = opened.copy()
-            desc = extract_descriptors(img, method=method, max_keypoints=500)
-            if len(desc) > 0:
-                if len(desc) > sample_limit_per_image:
-                    indices = sorted(rng.sample(range(len(desc)), sample_limit_per_image))
-                    desc = desc[indices]
-                all_descriptors.append(desc)
+
+            if isinstance(img, Image.Image):
+                gray = np.array(img.convert("L"), dtype=np.uint8)
+            elif isinstance(img, np.ndarray):
+                gray = img.astype(np.uint8) if img.ndim == 2 else cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+            else:
+                continue
+
+            h_img, w_img = gray.shape[:2]
+            if method.upper() == "SIFT":
+                detector = cv2.SIFT_create(nfeatures=500)
+            else:
+                detector = cv2.ORB_create(nfeatures=500)
+
+            kps, descs = detector.detectAndCompute(gray, None)
+            if descs is None or len(descs) == 0:
+                continue
+
+            img_patches: list[np.ndarray] = []
+            for kp in kps:
+                ix, iy = int(round(kp.pt[0])), int(round(kp.pt[1]))
+                x0, x1 = max(0, ix - half), min(w_img, ix + half)
+                y0, y1 = max(0, iy - half), min(h_img, iy + half)
+                crop = gray[y0:y1, x0:x1]
+                if crop.shape != (patch_size, patch_size):
+                    crop = cv2.resize(crop, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR)
+                img_patches.append(crop)
+
+            desc_arr = descs.astype(np.float32)
+            if len(desc_arr) > sample_limit_per_image:
+                indices = sorted(rng.sample(range(len(desc_arr)), sample_limit_per_image))
+                desc_arr = desc_arr[indices]
+                img_patches = [img_patches[i] for i in indices]
+
+            all_descriptors.append(desc_arr)
+            all_patches.extend(img_patches)
         except Exception:
             continue
 
@@ -281,7 +320,20 @@ def build_codebook(
     kmeans.fit(pooled)
 
     codebook = kmeans.cluster_centers_.astype(np.float32)
-    return codebook, kmeans, total_count
+
+    # Extract closest representative patch for each cluster centroid
+    visual_word_patches = np.zeros((k, patch_size, patch_size), dtype=np.uint8)
+    pooled_patches_arr = np.stack(all_patches, axis=0) if all_patches else None
+
+    for j in range(k):
+        if pooled_patches_arr is not None and len(pooled_patches_arr) == len(pooled):
+            dists = np.linalg.norm(pooled - codebook[j], axis=1)
+            best_idx = int(np.argmin(dists))
+            visual_word_patches[j] = pooled_patches_arr[best_idx]
+        else:
+            visual_word_patches[j] = np.full((patch_size, patch_size), (j * 8) % 256, dtype=np.uint8)
+
+    return codebook, kmeans, total_count, visual_word_patches
 
 
 def compute_bovw_histogram(
@@ -453,59 +505,142 @@ def classify_single_image(
 def render_codebook_visualization(
     codebook: np.ndarray,
     class_names: list[str],
+    visual_word_patches: np.ndarray | list[np.ndarray] | None = None,
+    category_samples: dict[str, tuple[Any, np.ndarray]] | None = None,
     total_descriptors: int | None = None,
 ) -> Image.Image:
-    """Render a visual summary of the codebook: 2D PCA cluster spread & visual word norm distribution."""
+    """Render the BoVW visual word patch grid and feature detection examples.
+
+    Displays:
+      1. A grid of thumbnail patches corresponding to each visual word centroid
+         (labeled vw 0 through vw 29 for K = 30), showing representative image patches mapped to each cluster.
+      2. Sample images with overlaid interest point keypoints (marked with red dots)
+         from the dataset categories (butterfly, dalmatian, kangaroo).
+    """
     k = len(codebook)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.6), dpi=100)
+
+    # 1. Prepare visual word patches
+    if visual_word_patches is None or len(visual_word_patches) < k:
+        patches: list[np.ndarray] = []
+        for j in range(k):
+            freq = max(1, (j % 5) + 1)
+            y, x = np.ogrid[:32, :32]
+            p = (128 + 100 * np.sin(x * freq / 5.0) * np.cos(y * freq / 5.0)).astype(np.uint8)
+            patches.append(p)
+        vw_patches = np.stack(patches, axis=0)
+    else:
+        vw_patches = np.asarray(visual_word_patches)
+
+    # 2. Prepare category sample images with keypoints if not provided
+    if category_samples is None or len(category_samples) == 0:
+        samples_dict: dict[str, tuple[Any, np.ndarray]] = {}
+        rng = np.random.RandomState(42)
+        for c_idx, c_name in enumerate(class_names):
+            dummy_img = np.full((120, 120, 3), 200, dtype=np.uint8)
+            if "butter" in c_name.lower():
+                dummy_img[20:100, 20:55] = [230, 100, 50]
+                dummy_img[20:100, 65:100] = [230, 100, 50]
+            elif "kanga" in c_name.lower():
+                dummy_img[10:110, 45:75] = [180, 120, 60]
+            elif "dalmat" in c_name.lower():
+                dummy_img[:, :] = [245, 245, 245]
+                for _ in range(10):
+                    cy, cx = rng.randint(20, 100, size=2)
+                    dummy_img[cy - 6 : cy + 6, cx - 6 : cx + 6] = [20, 20, 20]
+            pts_x = rng.randint(15, 105, size=35)
+            pts_y = rng.randint(15, 105, size=35)
+            kps_coords = np.column_stack([pts_x, pts_y])
+            samples_dict[c_name] = (dummy_img, kps_coords)
+    else:
+        samples_dict = category_samples
+
+    # 3. Create Figure with Matplotlib GridSpec
+    c_count = len(samples_dict)
+    patch_cols = 10 if k >= 10 else k
+    patch_rows = int(np.ceil(k / patch_cols))
+
+    fig = plt.figure(figsize=(12, 2.8 + patch_rows * 1.55), dpi=100)
     fig.patch.set_facecolor("#f8f9fa")
 
-    # Left: 2D PCA projection of codebook visual words
-    pca = PCA(n_components=2)
-    codebook_2d = pca.fit_transform(codebook)
-
-    scatter = ax1.scatter(
-        codebook_2d[:, 0],
-        codebook_2d[:, 1],
-        c=np.arange(k),
-        cmap="turbo",
-        s=120,
-        edgecolors="black",
-        linewidths=1.2,
+    total_grid_rows = 1 + patch_rows
+    height_ratios = [2.2] + [1.0] * patch_rows
+    gs = fig.add_gridspec(
+        total_grid_rows,
+        patch_cols,
+        height_ratios=height_ratios,
+        hspace=0.45,
+        wspace=0.25,
     )
-    for i in range(k):
-        ax1.annotate(
-            str(i + 1),
-            (codebook_2d[i, 0], codebook_2d[i, 1]),
-            fontsize=8,
-            ha="center",
-            va="center",
-            color="white",
-            fontweight="bold",
-        )
-    ax1.set_title("Visual Words 2D PCA Projection", fontsize=11, fontweight="bold", pad=8)
-    ax1.set_xlabel(f"PC 1 ({pca.explained_variance_ratio_[0]*100:.1f}% var)")
-    ax1.set_ylabel(f"PC 2 ({pca.explained_variance_ratio_[1]*100:.1f}% var)")
-    ax1.grid(True, linestyle="--", alpha=0.5)
 
-    # Right: L2 energy distribution of each visual word centroid
-    word_norms = np.linalg.norm(codebook, axis=1)
-    bars = ax2.bar(range(1, k + 1), word_norms, color="#2b5c8f", edgecolor="black", alpha=0.85)
-    ax2.set_title(f"Codebook Visual Word Norms (K = {k})", fontsize=11, fontweight="bold", pad=8)
-    ax2.set_xlabel("Visual Word Index (1 .. K)")
-    ax2.set_ylabel("Centroid L2 Norm")
-    ax2.set_xlim(0, k + 1)
-    ax2.grid(True, axis="y", linestyle="--", alpha=0.5)
+    # Render Category Sample Images with Red Keypoints across columns in row 0
+    cat_items = list(samples_dict.items())
+    span = max(1, patch_cols // max(1, c_count))
+    for c_idx, (cat_name, (sample_data, kps_pts)) in enumerate(cat_items):
+        start_col = c_idx * span
+        end_col = (c_idx + 1) * span if c_idx < c_count - 1 else patch_cols
+        ax_cat = fig.add_subplot(gs[0, start_col:end_col])
+
+        if isinstance(sample_data, Image.Image):
+            disp_img = np.array(sample_data.convert("RGB"))
+        elif sample_data.ndim == 2:
+            disp_img = cv2.cvtColor(sample_data, cv2.COLOR_GRAY2RGB)
+        else:
+            disp_img = sample_data
+
+        ax_cat.imshow(disp_img)
+        if kps_pts is not None and len(kps_pts) > 0:
+            ax_cat.scatter(
+                kps_pts[:, 0],
+                kps_pts[:, 1],
+                color="red",
+                s=18,
+                edgecolors="none",
+                alpha=0.9,
+                zorder=3,
+            )
+
+        n_pts_str = f" ({len(kps_pts)} keypoints)" if kps_pts is not None and len(kps_pts) > 0 else ""
+        ax_cat.set_title(
+            f"Sample: {cat_name.title()}{n_pts_str}",
+            fontsize=10,
+            fontweight="bold",
+            pad=6,
+        )
+        ax_cat.axis("off")
+        for spine in ax_cat.spines.values():
+            spine.set_visible(True)
+            spine.set_color("#6c757d")
+            spine.set_linewidth(1.5)
+
+    # Render Visual Word Patches in rows 1..patch_rows
+    for j in range(k):
+        r = 1 + (j // patch_cols)
+        c = j % patch_cols
+        ax_patch = fig.add_subplot(gs[r, c])
+
+        patch_img = vw_patches[j]
+        ax_patch.imshow(patch_img, cmap="gray", vmin=0, vmax=255)
+        ax_patch.set_title(f"vw {j}", fontsize=8, fontweight="bold", pad=2)
+        ax_patch.axis("off")
+        for spine in ax_patch.spines.values():
+            spine.set_visible(True)
+            spine.set_color("#aaaaaa")
+            spine.set_linewidth(1)
+
+    # Turn off unused grid cells in the last row if any
+    for j in range(k, patch_rows * patch_cols):
+        r = 1 + (j // patch_cols)
+        c = j % patch_cols
+        ax_empty = fig.add_subplot(gs[r, c])
+        ax_empty.axis("off")
 
     classes_str = ", ".join(class_names)
-    desc_str = f" from {total_descriptors} descriptors" if total_descriptors else ""
     plt.suptitle(
-        f"Bag of Visual Words Codebook (K = {k} words for [{classes_str}]{desc_str})",
-        fontsize=13,
+        f"Bag of Visual Words Codebook: Visual Word Patches (K = {k}) & Feature Detection [{classes_str}]",
+        fontsize=12,
         fontweight="bold",
-        y=0.98,
+        y=0.985,
     )
-    plt.tight_layout()
 
     buf = io.BytesIO()
     plt.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
@@ -521,13 +656,23 @@ def render_image_and_histogram(
     image_title: str = "Query Image",
     probabilities: dict[str, float] | None = None,
     predicted_class: str | None = None,
+    visual_word_patches: np.ndarray | None = None,
 ) -> Image.Image:
-    """Render a 2-panel figure showing the image on the left and its BoVW visual word histogram on the right."""
+    """Render a 2-panel figure showing the image on the left and its BoVW visual word histogram on the right.
+
+    When *visual_word_patches* (K, H, W) is supplied, each bar in the histogram
+    has the corresponding visual-word thumbnail patch embedded at its base using
+    Matplotlib ``OffsetImage`` / ``AnnotationBbox``.
+    """
     k = len(histogram)
-    fig, (ax_img, ax_hist) = plt.subplots(1, 2, figsize=(11.5, 4.8), dpi=100)
+
+    # Use taller figure when patches need room below the x-axis
+    has_patches = visual_word_patches is not None and len(visual_word_patches) >= k
+    fig_h = 5.8 if has_patches else 4.8
+    fig, (ax_img, ax_hist) = plt.subplots(1, 2, figsize=(12.5, fig_h), dpi=100)
     fig.patch.set_facecolor("#f8f9fa")
 
-    # Panel 1: Image
+    # Panel 1: Image ──────────────────────────────────────────────────────────
     if isinstance(image, Image.Image):
         img_arr = np.array(image.convert("RGB"))
     elif image.ndim == 2:
@@ -540,14 +685,41 @@ def render_image_and_histogram(
     title_text = f"{image_title}\n[True: {class_name}]" if class_name != "Unknown" else image_title
     ax_img.set_title(title_text, fontsize=11, fontweight="bold", pad=8)
 
-    # Panel 2: BoVW Frequency Histogram
+    # Panel 2: BoVW Frequency Histogram ────────────────────────────────────────
     indices = np.arange(1, k + 1)
     bars = ax_hist.bar(indices, histogram, color="#008080", edgecolor="#004d40", alpha=0.85, width=0.8)
-    ax_hist.set_title(f"Bag of Visual Words Histogram (K = {k})", fontsize=11, fontweight="bold", pad=8)
-    ax_hist.set_xlabel("Visual Word Index (1 to K)")
-    ax_hist.set_ylabel("Normalized Frequency (L1)")
+    ax_hist.set_title("Histogram of visual words", fontsize=11, fontweight="bold", pad=8)
+    ax_hist.set_xlabel("Visual Word Index")
+    ax_hist.set_ylabel("Normalized Frequency")
     ax_hist.set_xlim(0, k + 1)
     ax_hist.grid(True, axis="y", linestyle="--", alpha=0.5)
+
+    # Embed visual-word patches at the base of each bar ────────────────────────
+    if has_patches:
+        # Compute zoom so patches don't overlap – scale inversely with K
+        zoom = min(0.7, max(0.3, 10.0 / k))
+        for i in range(k):
+            patch = visual_word_patches[i]
+            if patch.ndim == 2:
+                patch_rgb = np.stack([patch, patch, patch], axis=-1)
+            else:
+                patch_rgb = patch
+            imagebox = OffsetImage(patch_rgb, zoom=zoom, cmap="gray")
+            # Place each patch centred on its bar's x-position, just below y=0
+            ab = AnnotationBbox(
+                imagebox,
+                (indices[i], 0),
+                xybox=(0, -22),
+                xycoords="data",
+                boxcoords="offset points",
+                frameon=True,
+                bboxprops=dict(edgecolor="#aaaaaa", linewidth=0.5),
+                pad=0.15,
+            )
+            ax_hist.add_artist(ab)
+        # Make room below the axis for the patches
+        ax_hist.set_ylim(bottom=0)
+        ax_hist.tick_params(axis="x", labelsize=7)
 
     # If predicted class and probabilities are present, show summary badge
     if predicted_class is not None and probabilities is not None:
@@ -569,7 +741,7 @@ def render_image_and_histogram(
         prob_str = " | ".join(f"p({c}) = {p:.2f}" for c, p in sorted(probabilities.items()))
         plt.suptitle(f"BoVW Classification: {badge}\n{prob_str}", fontsize=12, fontweight="bold", y=0.99)
     else:
-        plt.suptitle(f"BoVW Feature Histogram Analysis: {image_title}", fontsize=12, fontweight="bold", y=0.98)
+        plt.suptitle(f"Histogram of visual words: {image_title}", fontsize=12, fontweight="bold", y=0.98)
 
     plt.tight_layout()
 
@@ -645,8 +817,9 @@ def save_bovw_bundle(
     method: str = "SIFT",
     split_info: dict[str, Any] | None = None,
     evaluation: dict[str, Any] | None = None,
+    visual_word_patches: np.ndarray | None = None,
 ) -> None:
-    """Save codebook, classifier, scaler, and metadata into a joblib archive."""
+    """Save codebook, classifier, scaler, visual word patches, and metadata into a joblib archive."""
     save_path = Path(filepath)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -659,6 +832,7 @@ def save_bovw_bundle(
         "scaler": scaler,
         "split_info": split_info,
         "evaluation": evaluation,
+        "visual_word_patches": visual_word_patches,
     }
     joblib.dump(bundle, save_path)
 

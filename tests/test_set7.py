@@ -116,13 +116,14 @@ class BoVWCoreTests(unittest.TestCase):
 
         # Build codebook with K = 12 visual words for speed in unit test
         k = 12
-        codebook, kmeans, total_desc = build_codebook(
+        codebook, kmeans, total_desc, vw_patches = build_codebook(
             train_paths=train_p,
             k=k,
             method="SIFT",
             random_state=42,
         )
         self.assertEqual(codebook.shape, (k, 128))
+        self.assertEqual(vw_patches.shape, (k, 32, 32))
         self.assertGreater(total_desc, k)
 
         # Test histogram computation
@@ -139,7 +140,7 @@ class BoVWCoreTests(unittest.TestCase):
         train_p, train_l, test_p, test_l = split_dataset(image_paths, labels, test_size=0.33, random_state=42)
 
         k = 10
-        codebook, _, _ = build_codebook(train_p, k=k, method="SIFT", random_state=42)
+        codebook, _, _, _ = build_codebook(train_p, k=k, method="SIFT", random_state=42)
 
         X_train, _ = compute_dataset_histograms(train_p, codebook, method="SIFT")
         clf, scaler = train_bovw_classifier(X_train, train_l, class_names, random_state=42)
@@ -159,7 +160,7 @@ class BoVWCoreTests(unittest.TestCase):
         train_p, train_l, _, _ = split_dataset(image_paths, labels, test_size=0.25, random_state=42)
 
         k = 10
-        codebook, _, _ = build_codebook(train_p, k=k, method="SIFT", random_state=42)
+        codebook, _, _, _ = build_codebook(train_p, k=k, method="SIFT", random_state=42)
         X_train, _ = compute_dataset_histograms(train_p, codebook, method="SIFT")
         clf, scaler = train_bovw_classifier(X_train, train_l, class_names, random_state=42)
 
