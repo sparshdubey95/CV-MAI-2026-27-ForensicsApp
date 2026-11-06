@@ -331,3 +331,125 @@ def ask_template(
             show_error(parent, "Template Error", f"Could not open template image: {error}")
             return None
     return default_crop
+
+
+MODEL_FILETYPES = [
+    ("NumPy compressed archive", "*.npz"),
+    ("NumPy binary file", "*.npy"),
+    ("All files", "*.*"),
+]
+
+
+def ask_npz_file(parent: tk.Misc | None, title: str = "Select Eigenface model (.npz)") -> str | None:
+    """Ask user to select an existing model .npz file."""
+    filename = filedialog.askopenfilename(
+        parent=parent,
+        title=title,
+        filetypes=MODEL_FILETYPES,
+    )
+    return filename or None
+
+
+def ask_save_npz_file(
+    parent: tk.Misc | None,
+    title: str = "Save Eigenface model (.npz)",
+    initialfile: str = "eigenface_model.npz",
+) -> str | None:
+    """Ask user to specify destination for saving model .npz file."""
+    filename = filedialog.asksaveasfilename(
+        parent=parent,
+        title=title,
+        defaultextension=".npz",
+        initialfile=initialfile,
+        filetypes=MODEL_FILETYPES,
+    )
+    return filename or None
+
+
+def ask_eigenface_builder_parameters(
+    parent: tk.Misc | None,
+    initial_source: str = "folder",
+    initial_k: int = 50,
+    initial_size: str = "64, 64",
+) -> tuple[str, int, tuple[int, int]] | None:
+    """Dialog to configure dataset source, number of components K, and image dimensions."""
+    def _parse(source_val: str, k_val: str, size_str: str) -> tuple[str, int, tuple[int, int]]:
+        k = int(k_val.strip())
+        if k < 1:
+            raise ValueError("K (number of components) must be at least 1.")
+        parts = [int(x.strip()) for x in size_str.replace("x", ",").split(",") if x.strip()]
+        if len(parts) == 1:
+            size = (parts[0], parts[0])
+        elif len(parts) == 2:
+            size = (parts[0], parts[1])
+        else:
+            raise ValueError("Image size must be 1 or 2 positive integers (e.g. '64, 64').")
+        if size[0] < 8 or size[1] < 8:
+            raise ValueError("Target image dimensions must be at least 8x8 pixels.")
+        return source_val, k, size
+
+    if parent is None:
+        return _parse(initial_source, str(initial_k), initial_size)
+
+    result: dict[str, tuple[str, int, tuple[int, int]] | None] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Eigenface Builder Setup")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=14)
+    frame.pack(fill="both", expand=True)
+
+    source_var = tk.StringVar(value=initial_source)
+    k_var = tk.StringVar(value=str(initial_k))
+    size_var = tk.StringVar(value=initial_size)
+
+    ttk.Label(frame, text="Select Dataset Source:", font=("TkDefaultFont", 9, "bold")).grid(
+        row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
+    )
+    ttk.Radiobutton(
+        frame,
+        text="Folder of face images (local folder)",
+        variable=source_var,
+        value="folder",
+    ).grid(row=1, column=0, columnspan=2, sticky="w", padx=(10, 0), pady=(0, 2))
+    ttk.Radiobutton(
+        frame,
+        text="LFW Face Dataset (sklearn.datasets.fetch_lfw_people)",
+        variable=source_var,
+        value="lfw",
+    ).grid(row=2, column=0, columnspan=2, sticky="w", padx=(10, 0), pady=(0, 10))
+
+    ttk.Separator(frame, orient="horizontal").grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+
+    ttk.Label(frame, text="PCA Components (K):").grid(row=4, column=0, sticky="w", pady=(0, 6))
+    ttk.Entry(frame, textvariable=k_var, width=14).grid(row=4, column=1, sticky="e", padx=(12, 0), pady=(0, 6))
+
+    ttk.Label(frame, text="Normalized Face Size (WxH):").grid(row=5, column=0, sticky="w")
+    ttk.Entry(frame, textvariable=size_var, width=14).grid(row=5, column=1, sticky="e", padx=(12, 0))
+
+    error_label = ttk.Label(frame, text="", foreground="red", wraplength=280)
+    error_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+    def confirm() -> None:
+        try:
+            parsed = _parse(source_var.get(), k_var.get(), size_var.get())
+        except ValueError as err:
+            error_label.configure(text=str(err))
+            return
+        result["value"] = parsed
+        window.destroy()
+
+    def cancel() -> None:
+        window.destroy()
+
+    ttk.Button(buttons, text="Continue", command=confirm).pack(side="right")
+    ttk.Button(buttons, text="Cancel", command=cancel).pack(side="right", padx=(0, 6))
+    window.protocol("WM_DELETE_WINDOW", cancel)
+    window.grab_set()
+    window.wait_window()
+    return result["value"]
+

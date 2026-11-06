@@ -21,6 +21,9 @@ from .corners import CornerDetectionTool
 from .feature_descriptors import FeatureDescriptorTool
 from .feature_matching import FeatureMatchingTool
 from .image_lookup import ImageLookupTool
+from .face_detection import FaceDetectionTool
+from .eigenface_builder import EigenfaceBuilderTool
+from .face_recognition import FaceRecognitionTool
 
 
 def build_tool_registry() -> ToolRegistry:
@@ -52,6 +55,10 @@ def build_tool_registry() -> ToolRegistry:
             FeatureDescriptorTool(),
             FeatureMatchingTool(),
             ImageLookupTool(),
+            # Set 6: Face Detection & Recognition
+            FaceDetectionTool(),
+            EigenfaceBuilderTool(),
+            FaceRecognitionTool(),
         ]
     )
 
