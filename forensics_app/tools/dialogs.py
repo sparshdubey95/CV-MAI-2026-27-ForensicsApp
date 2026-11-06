@@ -453,3 +453,203 @@ def ask_eigenface_builder_parameters(
     window.wait_window()
     return result["value"]
 
+
+BOVW_FILETYPES = [
+    ("BoVW model bundle", "*.bovw *.joblib *.pkl"),
+    ("All files", "*.*"),
+]
+
+
+def ask_bovw_model_file(
+    parent: tk.Misc | None,
+    title: str = "Select BoVW Model Bundle (.bovw / .joblib)",
+) -> str | None:
+    """Prompt user to open a saved BoVW model bundle."""
+    filename = filedialog.askopenfilename(
+        parent=parent,
+        title=title,
+        filetypes=BOVW_FILETYPES,
+    )
+    return filename or None
+
+
+def ask_save_bovw_model_file(
+    parent: tk.Misc | None,
+    title: str = "Save BoVW Model Bundle (.bovw)",
+    initialfile: str = "bovw_model.bovw",
+) -> str | None:
+    """Prompt user to specify save location for a BoVW model bundle."""
+    filename = filedialog.asksaveasfilename(
+        parent=parent,
+        title=title,
+        defaultextension=".bovw",
+        initialfile=initialfile,
+        filetypes=BOVW_FILETYPES,
+    )
+    return filename or None
+
+
+def ask_bovw_codebook_parameters(
+    parent: tk.Misc | None,
+    class_names: list[str],
+    default_split: float = 0.25,
+) -> tuple[int, str, float] | None:
+    """Dialog displaying detected categories and allowing configuration of K, method, and test split."""
+    c_count = len(class_names)
+    recommended_k = 10 * c_count  # Coursework requirement: K = 10 * number of classes (K=30 for 3 classes)
+
+    def _parse(k_str: str, method_val: str, split_str: str) -> tuple[int, str, float]:
+        k = int(k_str.strip())
+        if k < 2:
+            raise ValueError("K (visual words) must be at least 2.")
+        split = float(split_str.strip())
+        if not (0.05 <= split <= 0.5):
+            raise ValueError("Test split ratio must be between 0.05 and 0.5 (e.g. 0.25).")
+        return k, method_val, split
+
+    if parent is None:
+        return recommended_k, "SIFT", default_split
+
+    result: dict[str, tuple[int, str, float] | None] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("BoVW Codebook Configuration")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text=f"Detected {c_count} Classes: {', '.join(class_names)}",
+        font=("TkDefaultFont", 10, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+    k_var = tk.StringVar(value=str(recommended_k))
+    method_var = tk.StringVar(value="SIFT")
+    split_var = tk.StringVar(value=str(default_split))
+
+    ttk.Label(frame, text=f"Visual Words (K = 10 × {c_count}):").grid(
+        row=1, column=0, sticky="w", pady=(0, 6)
+    )
+    ttk.Entry(frame, textvariable=k_var, width=14).grid(
+        row=1, column=1, sticky="e", padx=(12, 0), pady=(0, 6)
+    )
+
+    ttk.Label(frame, text="Descriptor Method:").grid(
+        row=2, column=0, sticky="w", pady=(0, 6)
+    )
+    combo_method = ttk.Combobox(
+        frame,
+        textvariable=method_var,
+        values=["SIFT", "ORB"],
+        state="readonly",
+        width=12,
+    )
+    combo_method.grid(row=2, column=1, sticky="e", padx=(12, 0), pady=(0, 6))
+
+    ttk.Label(frame, text="Test Set Ratio (e.g. 0.25 = 25%):").grid(
+        row=3, column=0, sticky="w", pady=(0, 6)
+    )
+    ttk.Entry(frame, textvariable=split_var, width=14).grid(
+        row=3, column=1, sticky="e", padx=(12, 0), pady=(0, 6)
+    )
+
+    error_label = ttk.Label(frame, text="", foreground="red", wraplength=320)
+    error_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+    def confirm() -> None:
+        try:
+            parsed = _parse(k_var.get(), method_var.get(), split_var.get())
+        except ValueError as err:
+            error_label.configure(text=str(err))
+            return
+        result["value"] = parsed
+        window.destroy()
+
+    def cancel() -> None:
+        window.destroy()
+
+    ttk.Button(buttons, text="Build Codebook", command=confirm).pack(side="right")
+    ttk.Button(buttons, text="Cancel", command=cancel).pack(side="right", padx=(0, 6))
+    window.protocol("WM_DELETE_WINDOW", cancel)
+    window.grab_set()
+    window.wait_window()
+    return result["value"]
+
+
+def ask_bovw_select_test_image(
+    parent: tk.Misc | None,
+    test_items: list[tuple[str, str]],
+) -> int | None:
+    """Prompt user to choose one of the held-out test set images to inspect."""
+    if not test_items:
+        return None
+    if parent is None:
+        return 0
+
+    chosen: dict[str, int | None] = {"index": None}
+    window = tk.Toplevel(parent)
+    window.title("Select Held-Out Test Image")
+    window.transient(parent)
+    window.geometry("450x320")
+
+    frame = ttk.Frame(window, padding=12)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Choose a held-out test image to generate & view its BoVW histogram:",
+        wraplength=420,
+    ).pack(anchor="w", pady=(0, 8))
+
+    list_frame = ttk.Frame(frame)
+    list_frame.pack(fill="both", expand=True)
+
+    scroll = ttk.Scrollbar(list_frame, orient="vertical")
+    tree = ttk.Treeview(
+        list_frame,
+        columns=("class", "filename"),
+        show="headings",
+        selectmode="browse",
+        yscrollcommand=scroll.set,
+    )
+    scroll.configure(command=tree.yview)
+    scroll.pack(side="right", fill="y")
+    tree.pack(side="left", fill="both", expand=True)
+
+    tree.heading("class", text="Category")
+    tree.heading("filename", text="File Name")
+    tree.column("class", width=120, stretch=False)
+    tree.column("filename", width=260, stretch=True)
+
+    for idx, (c_name, f_name) in enumerate(test_items):
+        tree.insert("", "end", iid=str(idx), values=(c_name, f_name))
+
+    tree.selection_set("0")
+
+    buttons = ttk.Frame(frame)
+    buttons.pack(fill="x", pady=(10, 0))
+
+    def confirm() -> None:
+        selected = tree.selection()
+        if selected:
+            chosen["index"] = int(selected[0])
+            window.destroy()
+
+    def cancel() -> None:
+        window.destroy()
+
+    ttk.Button(buttons, text="Inspect Histogram", command=confirm).pack(side="right")
+    ttk.Button(buttons, text="Cancel", command=cancel).pack(side="right", padx=(0, 6))
+    tree.bind("<Double-1>", lambda _e: confirm())
+    window.protocol("WM_DELETE_WINDOW", cancel)
+    window.grab_set()
+    window.wait_window()
+    return chosen["index"]
+
+

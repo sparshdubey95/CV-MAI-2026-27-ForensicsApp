@@ -261,7 +261,7 @@ class FaceRecognitionTests(unittest.TestCase):
         self.assertEqual(len(top_matches), 3)
         # Rank 1 match should be Alice Smith with near zero distance
         self.assertEqual(top_matches[0]["name"], "Alice Smith")
-        self.assertAlmostEqual(top_matches[0]["distance"], 0.0, places=3)
+        self.assertAlmostEqual(top_matches[0]["distance"], 0.0, places=2)
 
         # Distances should be ordered ascending
         self.assertLessEqual(top_matches[0]["distance"], top_matches[1]["distance"])

@@ -24,6 +24,7 @@ from .image_lookup import ImageLookupTool
 from .face_detection import FaceDetectionTool
 from .eigenface_builder import EigenfaceBuilderTool
 from .face_recognition import FaceRecognitionTool
+from .bovw_tools import BoVWCodebookTool, BoVWHistogramTool, BoVWClassifierTool
 
 
 def build_tool_registry() -> ToolRegistry:
@@ -59,6 +60,10 @@ def build_tool_registry() -> ToolRegistry:
             FaceDetectionTool(),
             EigenfaceBuilderTool(),
             FaceRecognitionTool(),
+            # Set 7: Bag of Visual Words & Classification
+            BoVWCodebookTool(),
+            BoVWHistogramTool(),
+            BoVWClassifierTool(),
         ]
     )
 
