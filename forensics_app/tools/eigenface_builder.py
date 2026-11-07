@@ -1,355 +1,445 @@
 """Eigenface model builder using PCA (Set 6.2).
 
 This module implements:
-  - Face dataset loading from local folders or sklearn.datasets.fetch_lfw_people.
-  - Image-to-person name correspondence tracking.
-  - Consistent grayscale conversion and resizing.
-  - Principal Component Analysis (PCA) to compute:
-      - Mean face
-      - Eigenfaces (principal eigenvectors)
-      - Training image PCA coefficients (projections)
-  - Model serialization and loading via NumPy (.npz).
-  - Visualization of the mean face and the top K eigenfaces.
+  - Face dataset loading with strict Train/Test separation (LFW or local folder).
+  - Background threaded LFW dataset download (UI never freezes).
+  - Automatic test dataset export to 'LFW_Test_Images' with identity manifest.
+  - Correct mathematical Eigenfaces workflow:
+      1. Calculate mean face μ = (1/N) ∑ x_i
+      2. Centre training images: x_i - μ
+      3. Calculate first K principal components via PCA/SVD (U_K)
+      4. Project training images: w_i = U_K^T (x_i - μ)
+      5. Store coefficients with corresponding identity labels
+  - Interactive GUI Controls:
+      - Fetch LFW Dataset
+      - Select K (default 12)
+      - Build Eigenfaces Model
+      - Visualise Eigenfaces (first 12, indexed 0–11)
+      - Save Model (.npy)
+  - Full model serialization as .npy (NumPy binary format) and .npz
 """
 
 from __future__ import annotations
 
 import io
 from pathlib import Path
-import re
+import threading
 import tkinter as tk
+from tkinter import ttk, messagebox
 from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image
-from sklearn.decomposition import PCA
+from PIL import Image, ImageTk
 
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
 from .dialogs import (
     ask_eigenface_builder_parameters,
     ask_image_folder,
-    ask_save_npz_file,
+    ask_npy_file,
+    ask_save_npy_file,
     show_error,
+)
+from .eigenfaces import (
+    SUPPORTED_IMAGE_EXTS,
+    compute_mean_face,
+    center_faces,
+    compute_principal_components,
+    export_test_dataset,
+    extract_person_name_from_filename,
+    fetch_lfw_people,
+    get_active_model,
+    load_eigenface_model,
+    load_face_dataset,
+    project_faces,
+    render_eigenfaces_montage,
+    save_eigenface_model,
+    set_active_model,
+    train_eigenfaces,
 )
 
 
-SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+class EigenfaceBuilderWindow(tk.Toplevel):
+    """Interactive GUI window for Set 6.2 Eigenfaces Builder."""
 
-# Active model cache stored in memory during an application session
-_ACTIVE_MODEL: dict[str, Any] | None = None
+    def __init__(self, parent: tk.Misc, document: ImageDocument) -> None:
+        super().__init__(parent)
+        self.title("Set 6.2 – Eigenfaces Builder")
+        self.transient(parent)
+        self.geometry("920x680")
+        self.minsize(800, 540)
 
+        self.document = document
+        self.result: ToolResult | None = None
 
-def get_active_model() -> dict[str, Any] | None:
-    """Retrieve the currently loaded or trained Eigenface model from memory."""
-    global _ACTIVE_MODEL
-    return _ACTIVE_MODEL
+        # State
+        self.dataset_X: np.ndarray | None = None
+        self.dataset_labels: np.ndarray | None = None
+        self.dataset_unique_names: list[str] = []
+        self.dataset_thumbnails: np.ndarray | None = None
+        self.dataset_source_desc: str = "None"
+        self.target_size: tuple[int, int] = (64, 64)
 
+        # Model state
+        self.mean_face: np.ndarray | None = None
+        self.eigenfaces: np.ndarray | None = None
+        self.coefficients: np.ndarray | None = None
+        self.pca: Any = None
+        self.k: int = 12
+        self.visualization_img: Image.Image | None = None
 
-def set_active_model(model: dict[str, Any] | None) -> None:
-    """Cache the active Eigenface model in memory."""
-    global _ACTIVE_MODEL
-    _ACTIVE_MODEL = model
+        self._build_ui()
 
+    def _build_ui(self) -> None:
+        main_frame = ttk.Frame(self, padding=14)
+        main_frame.pack(fill="both", expand=True)
 
-def extract_person_name_from_filename(stem: str) -> str:
-    """Extract a human-readable person name from a filename stem.
+        # Header
+        ttk.Label(
+            main_frame,
+            text="Set 6.2: Eigenfaces Model Builder",
+            font=("TkDefaultFont", 12, "bold"),
+            foreground="#003366",
+        ).pack(anchor="w", pady=(0, 2))
 
-    Examples
-    --------
-    - 'George_W_Bush_0001' -> 'George W Bush'
-    - 'Colin_Powell_04'    -> 'Colin Powell'
-    - 'person1_05'         -> 'Person 1'
-    """
-    cleaned = re.sub(r"[_\-\d]+$", "", stem).strip("_ -")
-    if not cleaned:
-        cleaned = stem
-    cleaned = cleaned.replace("_", " ").strip()
-    return cleaned.title() if cleaned else stem
+        ttk.Label(
+            main_frame,
+            text="Extract PCA Eigenfaces, mean face μ, and projection weights w_i = U_K^T(x_i - μ) from training faces.",
+            font=("TkDefaultFont", 9),
+            foreground="#555555",
+        ).pack(anchor="w", pady=(0, 10))
 
+        # Workflow Panel
+        workflow_frame = ttk.LabelFrame(main_frame, text="Model Construction Controls", padding=10)
+        workflow_frame.pack(fill="x", pady=(0, 10))
 
-def load_face_dataset(
-    source: str = "folder",
-    folder_path: str | Path | None = None,
-    target_size: tuple[int, int] = (64, 64),
-    min_faces_per_person: int = 1,
-) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
-    """Load face images and return preprocessed matrices and labels.
+        # 1. Dataset Controls
+        row1 = ttk.Frame(workflow_frame)
+        row1.pack(fill="x", pady=3)
 
-    Parameters
-    ----------
-    source : str
-        'folder' for a local directory or 'lfw' for fetch_lfw_people.
-    folder_path : str | Path | None
-        Path to local folder (required if source == 'folder').
-    target_size : tuple[int, int]
-        (width, height) for image resizing.
-    min_faces_per_person : int
-        Minimum number of images per person for LFW dataset.
-
-    Returns
-    -------
-    X : np.ndarray
-        (N, D) float32 matrix of flattened face vectors.
-    labels : np.ndarray
-        (N,) string array of person names.
-    unique_names : list[str]
-        List of unique person names.
-    thumbnails : np.ndarray
-        (N, H, W) uint8 array of preprocessed face images.
-    """
-    target_w, target_h = target_size
-    flattened_faces: list[np.ndarray] = []
-    face_labels: list[str] = []
-    face_thumbnails: list[np.ndarray] = []
-
-    if source.lower() == "lfw":
-        try:
-            from sklearn.datasets import fetch_lfw_people
-        except ImportError as err:
-            raise ImportError(f"scikit-learn is required to load LFW dataset: {err}") from err
-
-        lfw = fetch_lfw_people(
-            min_faces_per_person=max(min_faces_per_person, 1),
-            color=False,
-            resize=None,
-            download_if_missing=True,
+        self.btn_fetch_lfw = ttk.Button(
+            row1,
+            text="1. Fetch LFW Dataset",
+            command=self._on_fetch_lfw,
         )
-        if len(lfw.images) == 0:
-            raise ValueError("LFW dataset returned 0 face images.")
+        self.btn_fetch_lfw.pack(side="left", padx=(0, 6))
 
-        for i, raw_face in enumerate(lfw.images):
-            # Normalize raw float face to uint8 [0, 255]
-            if raw_face.max() <= 1.0:
-                uint8_face = np.clip(raw_face * 255.0, 0, 255).astype(np.uint8)
-            else:
-                uint8_face = np.clip(raw_face, 0, 255).astype(np.uint8)
-
-            pil_face = Image.fromarray(uint8_face).resize((target_w, target_h), Image.Resampling.LANCZOS)
-            arr = np.array(pil_face, dtype=np.uint8)
-            person_name = lfw.target_names[lfw.target[i]]
-
-            face_thumbnails.append(arr)
-            flattened_faces.append(arr.astype(np.float32).reshape(-1))
-            face_labels.append(str(person_name))
-
-    elif source.lower() == "folder":
-        if folder_path is None:
-            raise ValueError("A folder path must be provided when loading from 'folder'.")
-        root = Path(folder_path)
-        if not root.is_dir():
-            raise FileNotFoundError(f"Folder not found: {root}")
-
-        # Check for subdirectories (each subdirectory representing a person)
-        subdirs = [p for p in root.iterdir() if p.is_dir()]
-        has_subdirs = any(
-            any(f.suffix.lower() in SUPPORTED_IMAGE_EXTS for f in d.iterdir() if f.is_file())
-            for d in subdirs
+        self.btn_load_folder = ttk.Button(
+            row1,
+            text="Load Local Folder...",
+            command=self._on_load_folder,
         )
+        self.btn_load_folder.pack(side="left", padx=(0, 10))
 
-        image_entries: list[tuple[Path, str]] = []
+        self.data_status_var = tk.StringVar(value="No dataset loaded. Click 'Fetch LFW Dataset' or select a folder.")
+        self.data_status_label = ttk.Label(
+            row1,
+            textvariable=self.data_status_var,
+            font=("TkDefaultFont", 9, "italic"),
+            foreground="#666666",
+        )
+        self.data_status_label.pack(side="left", fill="x", expand=True)
 
-        if has_subdirs:
-            for subdir in sorted(subdirs):
-                person_name = subdir.name.replace("_", " ").title()
-                for img_path in sorted(subdir.iterdir()):
-                    if img_path.is_file() and img_path.suffix.lower() in SUPPORTED_IMAGE_EXTS:
-                        image_entries.append((img_path, person_name))
-        else:
-            # Flat folder
-            for img_path in sorted(root.iterdir()):
-                if img_path.is_file() and img_path.suffix.lower() in SUPPORTED_IMAGE_EXTS:
-                    person_name = extract_person_name_from_filename(img_path.stem)
-                    image_entries.append((img_path, person_name))
+        # 2. Select K
+        row2 = ttk.Frame(workflow_frame)
+        row2.pack(fill="x", pady=4)
 
-        if not image_entries:
-            raise ValueError(f"No supported image files found in folder: {root}")
+        ttk.Label(row2, text="2. Principal Components (K):", font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=(0, 6))
+        self.k_var = tk.IntVar(value=12)
+        self.k_spin = ttk.Spinbox(row2, from_=1, to=200, textvariable=self.k_var, width=8)
+        self.k_spin.pack(side="left", padx=(0, 16))
 
-        for img_path, person_name in image_entries:
+        # 3. Build Eigenfaces Model
+        self.btn_build_model = ttk.Button(
+            row2,
+            text="3. Build Eigenfaces Model",
+            command=self._on_build_model,
+            state="disabled",
+        )
+        self.btn_build_model.pack(side="left", padx=(0, 10))
+
+        # 4. Visualise Eigenfaces
+        self.btn_visualise = ttk.Button(
+            row2,
+            text="4. Visualise Eigenfaces (0–11)",
+            command=self._on_visualise,
+            state="disabled",
+        )
+        self.btn_visualise.pack(side="left", padx=(0, 10))
+
+        # 5. Save Model
+        self.btn_save_model = ttk.Button(
+            row2,
+            text="5. Save Model (.npy)",
+            command=self._on_save_model,
+            state="disabled",
+        )
+        self.btn_save_model.pack(side="left", padx=(0, 6))
+
+        # Status text
+        self.build_status_var = tk.StringVar(value="")
+        self.build_status_label = ttk.Label(
+            workflow_frame,
+            textvariable=self.build_status_var,
+            font=("TkDefaultFont", 9, "bold"),
+            foreground="#0055aa",
+        )
+        self.build_status_label.pack(anchor="w", pady=(4, 0))
+
+        # Visualization Preview Container
+        preview_frame = ttk.LabelFrame(main_frame, text="Eigenfaces Visualization (First 12, Indexed 0–11)", padding=10)
+        preview_frame.pack(fill="both", expand=True, pady=(0, 8))
+
+        self.canvas_label = ttk.Label(preview_frame, text="Eigenface montage will be displayed here after training.")
+        self.canvas_label.pack(fill="both", expand=True)
+
+        # Bottom Bar
+        bottom_bar = ttk.Frame(main_frame)
+        bottom_bar.pack(fill="x", pady=(4, 0))
+
+        ttk.Button(bottom_bar, text="Apply to ForensicsApp View & Close", command=self._on_apply).pack(side="right")
+        ttk.Button(bottom_bar, text="Close", command=self.destroy).pack(side="right", padx=(0, 6))
+
+    def _on_fetch_lfw(self) -> None:
+        """Download LFW in a background thread to keep GUI responsive."""
+        self.btn_fetch_lfw.configure(state="disabled")
+        self.btn_load_folder.configure(state="disabled")
+        self.data_status_var.set("Fetching LFW dataset in background... (Please wait)")
+        self.data_status_label.configure(foreground="#b8860b")
+
+        def worker() -> None:
             try:
-                with Image.open(img_path) as opened:
-                    gray = opened.convert("L")
-                    resized = gray.resize((target_w, target_h), Image.Resampling.LANCZOS)
-                    arr = np.array(resized, dtype=np.uint8)
-                    face_thumbnails.append(arr)
-                    flattened_faces.append(arr.astype(np.float32).reshape(-1))
-                    face_labels.append(person_name)
+                # Fetch train subset, automatically exports test images to LFW_Test_Images
+                X, labels, unique_names, thumbnails = load_face_dataset(
+                    source="lfw",
+                    target_size=self.target_size,
+                    min_faces_per_person=20,
+                    subset="train",
+                    export_test_images=True,
+                    export_dir="LFW_Test_Images",
+                )
+                self.after(0, self._on_dataset_loaded, X, labels, unique_names, thumbnails, "LFW People (Train subset)")
             except Exception as err:
-                continue
+                self.after(0, self._on_dataset_error, str(err))
 
-        if not flattened_faces:
-            raise ValueError(f"Failed to read any valid face images from: {root}")
-    else:
-        raise ValueError(f"Unknown dataset source: {source}")
+        threading.Thread(target=worker, daemon=True).start()
 
-    X = np.stack(flattened_faces, axis=0)
-    labels = np.array(face_labels, dtype=object)
-    unique_names = sorted(list(set(face_labels)))
-    thumbnails = np.stack(face_thumbnails, axis=0)
+    def _on_load_folder(self) -> None:
+        folder = ask_image_folder(self, title="Select folder of face images")
+        if not folder:
+            return
 
-    return X, labels, unique_names, thumbnails
+        self.btn_fetch_lfw.configure(state="disabled")
+        self.btn_load_folder.configure(state="disabled")
+        self.data_status_var.set("Loading local folder faces...")
 
+        def worker() -> None:
+            try:
+                X, labels, unique_names, thumbnails = load_face_dataset(
+                    source="folder",
+                    folder_path=folder,
+                    target_size=self.target_size,
+                )
+                self.after(0, self._on_dataset_loaded, X, labels, unique_names, thumbnails, f"Folder: {Path(folder).name}")
+            except Exception as err:
+                self.after(0, self._on_dataset_error, str(err))
 
-def train_eigenfaces(
-    X: np.ndarray,
-    n_components: int = 50,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, PCA]:
-    """Compute mean face, eigenfaces, and projection coefficients using PCA.
+        threading.Thread(target=worker, daemon=True).start()
 
-    Parameters
-    ----------
-    X : np.ndarray
-        (N, D) float32 matrix of face vectors.
-    n_components : int
-        Maximum number of principal components to keep.
+    def _on_dataset_loaded(
+        self,
+        X: np.ndarray,
+        labels: np.ndarray,
+        unique_names: list[str],
+        thumbnails: np.ndarray,
+        desc: str,
+    ) -> None:
+        self.btn_fetch_lfw.configure(state="normal")
+        self.btn_load_folder.configure(state="normal")
+        self.dataset_X = X
+        self.dataset_labels = labels
+        self.dataset_unique_names = unique_names
+        self.dataset_thumbnails = thumbnails
+        self.dataset_source_desc = desc
 
-    Returns
-    -------
-    mean_face : np.ndarray
-        (D,) float32 vector representing the average face.
-    eigenfaces : np.ndarray
-        (K, D) float32 matrix where each row is an eigenface.
-    coefficients : np.ndarray
-        (N, K) float32 matrix of training images projected into PCA space.
-    pca : PCA
-        Fitted scikit-learn PCA instance.
-    """
-    n_samples, n_features = X.shape
-    if n_samples < 2:
-        raise ValueError("At least 2 training images are required to compute PCA.")
+        msg = f"Dataset Ready: {len(X)} training images, {len(unique_names)} identities ({self.target_size[0]}x{self.target_size[1]})."
+        if "LFW" in desc:
+            msg += " Test images exported to 'LFW_Test_Images/'."
+        self.data_status_var.set(msg)
+        self.data_status_label.configure(foreground="#155724")
 
-    # Number of components cannot exceed min(n_samples - 1, n_features)
-    k = max(1, min(int(n_components), n_samples - 1, n_features))
+        self.btn_build_model.configure(state="normal")
 
-    pca = PCA(n_components=k, svd_solver="randomized", whiten=False)
-    coefficients = pca.fit_transform(X).astype(np.float32)
-    mean_face = pca.mean_.astype(np.float32)
-    eigenfaces = pca.components_.astype(np.float32)
+    def _on_dataset_error(self, err_msg: str) -> None:
+        self.btn_fetch_lfw.configure(state="normal")
+        self.btn_load_folder.configure(state="normal")
+        self.data_status_var.set(f"Dataset load failed: {err_msg}")
+        self.data_status_label.configure(foreground="#cc0000")
+        show_error(self, "Dataset Error", f"Failed to load dataset:\n{err_msg}")
 
-    return mean_face, eigenfaces, coefficients, pca
+    def _on_build_model(self) -> None:
+        if self.dataset_X is None or self.dataset_labels is None:
+            return
 
+        try:
+            k_val = int(self.k_var.get())
+        except ValueError:
+            k_val = 12
 
-def save_eigenface_model(
-    filepath: str | Path,
-    mean_face: np.ndarray,
-    eigenfaces: np.ndarray,
-    coefficients: np.ndarray,
-    labels: np.ndarray,
-    image_shape: tuple[int, int],
-    thumbnails: np.ndarray | None = None,
-    explained_variance_ratio: np.ndarray | None = None,
-) -> None:
-    """Save the trained PCA model to a compressed NumPy archive (.npz)."""
-    save_path = Path(filepath)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+        self.btn_build_model.configure(state="disabled")
+        self.build_status_var.set("Computing PCA Eigenfaces (mean face, components, projections)...")
 
-    data: dict[str, Any] = {
-        "mean_face": mean_face.astype(np.float32),
-        "eigenfaces": eigenfaces.astype(np.float32),
-        "coefficients": coefficients.astype(np.float32),
-        "labels": np.array(labels, dtype=str),
-        "image_shape": np.array(image_shape, dtype=np.int32),
-    }
-    if thumbnails is not None:
-        data["thumbnails"] = thumbnails.astype(np.uint8)
-    if explained_variance_ratio is not None:
-        data["explained_variance_ratio"] = explained_variance_ratio.astype(np.float32)
+        def worker() -> None:
+            try:
+                mean_face, eigenfaces, coefficients, pca = train_eigenfaces(
+                    self.dataset_X,
+                    n_components=k_val,
+                )
+                self.after(0, self._on_model_built, mean_face, eigenfaces, coefficients, pca, k_val)
+            except Exception as err:
+                self.after(0, self._on_build_error, str(err))
 
-    np.savez_compressed(save_path, **data)
+        threading.Thread(target=worker, daemon=True).start()
 
+    def _on_model_built(
+        self,
+        mean_face: np.ndarray,
+        eigenfaces: np.ndarray,
+        coefficients: np.ndarray,
+        pca: Any,
+        k_val: int,
+    ) -> None:
+        self.btn_build_model.configure(state="normal")
+        self.mean_face = mean_face
+        self.eigenfaces = eigenfaces
+        self.coefficients = coefficients
+        self.pca = pca
+        self.k = len(eigenfaces)
 
-def load_eigenface_model(filepath: str | Path) -> dict[str, Any]:
-    """Load a trained PCA eigenface model from a NumPy archive (.npz)."""
-    load_path = Path(filepath)
-    if not load_path.is_file():
-        raise FileNotFoundError(f"Eigenface model file not found: {load_path}")
+        var_pct = float(np.sum(pca.explained_variance_ratio_)) * 100.0
+        self.build_status_var.set(
+            f"Eigenfaces Model Built: K={self.k} components, total explained variance: {var_pct:.2f}%."
+        )
+        self.build_status_label.configure(foreground="#155724")
 
-    with np.load(load_path, allow_pickle=False) as npz:
-        required_keys = {"mean_face", "eigenfaces", "coefficients", "labels", "image_shape"}
-        missing = required_keys - set(npz.files)
-        if missing:
-            raise KeyError(f"Invalid model archive, missing keys: {missing}")
-
-        model = {
-            "mean_face": npz["mean_face"],
-            "eigenfaces": npz["eigenfaces"],
-            "coefficients": npz["coefficients"],
-            "labels": npz["labels"],
-            "image_shape": tuple(int(x) for x in npz["image_shape"]),
-            "thumbnails": npz["thumbnails"] if "thumbnails" in npz.files else None,
-            "explained_variance_ratio": (
-                npz["explained_variance_ratio"] if "explained_variance_ratio" in npz.files else None
-            ),
-            "filepath": str(load_path),
+        # Cache active session model
+        target_h, target_w = self.target_size
+        model_dict = {
+            "mean_face": mean_face,
+            "eigenfaces": eigenfaces,
+            "components": eigenfaces,
+            "coefficients": coefficients,
+            "training_coefficients": coefficients,
+            "labels": self.dataset_labels,
+            "target_names": self.dataset_unique_names,
+            "image_shape": (target_h, target_w),
+            "dimensions": (target_h, target_w),
+            "thumbnails": self.dataset_thumbnails,
+            "training_images": self.dataset_thumbnails,
+            "explained_variance_ratio": pca.explained_variance_ratio_,
+            "k": self.k,
+            "filepath": "In-memory session model",
         }
+        set_active_model(model_dict)
 
-    return model
+        self.btn_visualise.configure(state="normal")
+        self.btn_save_model.configure(state="normal")
+
+        # Auto-visualise
+        self._on_visualise()
+
+    def _on_build_error(self, err_msg: str) -> None:
+        self.btn_build_model.configure(state="normal")
+        self.build_status_var.set(f"Model build error: {err_msg}")
+        self.build_status_label.configure(foreground="#cc0000")
+        show_error(self, "Build Error", f"PCA computation failed:\n{err_msg}")
+
+    def _on_visualise(self) -> None:
+        if self.mean_face is None or self.eigenfaces is None or self.pca is None:
+            return
+
+        target_h, target_w = self.target_size
+        montage = render_eigenfaces_montage(
+            mean_face=self.mean_face,
+            eigenfaces=self.eigenfaces,
+            image_shape=(target_h, target_w),
+            max_eigenfaces=12,
+            explained_variance_ratio=self.pca.explained_variance_ratio_,
+            include_mean=True,
+        )
+        self.visualization_img = montage
+
+        # Preview on canvas
+        max_w, max_h = 860, 360
+        w, h = montage.size
+        scale = min(max_w / w, max_h / h, 1.0)
+        disp_w, disp_h = max(1, int(w * scale)), max(1, int(h * scale))
+        disp_img = montage.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(disp_img)
+        self.canvas_label.configure(image=photo, text="")
+        self.canvas_label.image = photo
+
+        # Prepare result
+        var_pct = float(np.sum(self.pca.explained_variance_ratio_)) * 100.0
+        details = {
+            "Operation": "PCA Eigenfaces Model Building (Set 6.2)",
+            "Dataset source": self.dataset_source_desc,
+            "Training samples": len(self.dataset_labels) if self.dataset_labels is not None else 0,
+            "Unique identities": len(self.dataset_unique_names),
+            "Principal components (K)": self.k,
+            "Total explained variance": f"{var_pct:.2f}%",
+            "Image dimensions": f"{target_w}x{target_h}",
+        }
+        self.result = ToolResult(
+            image=montage,
+            message=f"Eigenface model built: K={self.k} ({var_pct:.1f}% variance explained).",
+            details=details,
+        )
+
+    def _on_save_model(self) -> None:
+        if self.mean_face is None or self.eigenfaces is None:
+            return
+
+        save_path = ask_save_npy_file(
+            self,
+            title="Save Eigenface Model (.npy)",
+            initialfile="eigenface_model.npy",
+        )
+        if not save_path:
+            return
+
+        try:
+            target_h, target_w = self.target_size
+            save_eigenface_model(
+                filepath=save_path,
+                mean_face=self.mean_face,
+                eigenfaces=self.eigenfaces,
+                coefficients=self.coefficients if self.coefficients is not None else np.empty(0),
+                labels=self.dataset_labels if self.dataset_labels is not None else [],
+                image_shape=(target_h, target_w),
+                target_names=self.dataset_unique_names,
+                thumbnails=self.dataset_thumbnails,
+                explained_variance_ratio=self.pca.explained_variance_ratio_ if self.pca else None,
+                k=self.k,
+            )
+            self.build_status_var.set(f"Model saved successfully to: {Path(save_path).name}")
+            self.build_status_label.configure(foreground="#155724")
+        except Exception as err:
+            show_error(self, "Save Error", f"Failed to save model:\n{err}")
+
+    def _on_apply(self) -> None:
+        self.destroy()
 
 
-def render_eigenfaces_montage(
-    mean_face: np.ndarray,
-    eigenfaces: np.ndarray,
-    image_shape: tuple[int, int],
-    max_eigenfaces: int = 12,
-    explained_variance_ratio: np.ndarray | None = None,
-) -> Image.Image:
-    """Render a visualization of the mean face and the top K eigenfaces."""
-    target_h, target_w = image_shape
-    k = min(len(eigenfaces), max_eigenfaces)
-
-    # 1 panel for mean face + k panels for eigenfaces
-    total_panels = 1 + k
-    cols = 4 if total_panels >= 4 else total_panels
-    rows = int(np.ceil(total_panels / cols))
-
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 2.6, rows * 2.8), dpi=100)
-    fig.patch.set_facecolor("#f8f9fa")
-
-    flat_axes = np.array(axes).reshape(-1)
-
-    # 1. Render Mean Face
-    mean_img = mean_face.reshape((target_h, target_w))
-    ax_mean = flat_axes[0]
-    ax_mean.imshow(mean_img, cmap="gray")
-    ax_mean.set_title("Mean Face", fontsize=11, fontweight="bold", pad=6)
-    ax_mean.axis("off")
-
-    # 2. Render Top K Eigenfaces
-    for i in range(k):
-        ax = flat_axes[i + 1]
-        ef = eigenfaces[i].reshape((target_h, target_w))
-        # Normalize eigenface for optimal visual contrast
-        ef_norm = ef - ef.min()
-        if ef_norm.max() > 0:
-            ef_norm = ef_norm / ef_norm.max()
-
-        ax.imshow(ef_norm, cmap="bone")
-        if explained_variance_ratio is not None and i < len(explained_variance_ratio):
-            var_pct = explained_variance_ratio[i] * 100.0
-            ax.set_title(f"Eigenface {i + 1}\n({var_pct:.1f}% var)", fontsize=9, pad=4)
-        else:
-            ax.set_title(f"Eigenface {i + 1}", fontsize=9, pad=4)
-        ax.axis("off")
-
-    # Turn off unused subplot axes
-    for j in range(total_panels, len(flat_axes)):
-        flat_axes[j].axis("off")
-
-    plt.suptitle("PCA Eigenfaces Visualization", fontsize=14, fontweight="bold", y=0.98)
-    plt.tight_layout()
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-    buf.seek(0)
-    return Image.open(buf)
-
+# ---------------------------------------------------------------------------
+# ForensicsTool Class
+# ---------------------------------------------------------------------------
 
 class EigenfaceBuilderTool(ForensicsTool):
-    """Set 6.2: Build and save PCA Eigenfaces from a folder or LFW dataset."""
+    """Set 6.2: Build and save PCA Eigenfaces from LFW dataset or local folder."""
 
     tool_id = "eigenface_builder"
     title = "Eigenface builder"
@@ -358,108 +448,58 @@ class EigenfaceBuilderTool(ForensicsTool):
     requires_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
-        # Prompt for parameters (source, components K, dimensions)
+        if parent is not None:
+            dialog = EigenfaceBuilderWindow(parent, document)
+            dialog.grab_set()
+            dialog.wait_window()
+            return dialog.result
+
+        # Headless mode (automated testing)
         params = ask_eigenface_builder_parameters(
-            parent,
+            parent=None,
             initial_source="folder",
-            initial_k=50,
+            initial_k=12,
             initial_size="64, 64",
         )
         if params is None:
-            return None
+            source, k_req, (target_w, target_h) = "folder", 12, (64, 64)
+        else:
+            source, k_req, (target_w, target_h) = params
 
-        source, k_req, (target_w, target_h) = params
-        folder_path: str | None = None
-
-        if source == "folder":
-            folder_path = ask_image_folder(parent, title="Select folder of face images")
-            if not folder_path:
-                return None
-
-        # Load face dataset
-        try:
-            X, labels, unique_names, thumbnails = load_face_dataset(
-                source=source,
-                folder_path=folder_path,
-                target_size=(target_w, target_h),
-                min_faces_per_person=1,
-            )
-        except Exception as err:
-            if parent is not None:
-                show_error(parent, "Dataset Load Error", str(err))
-            return None
-
-        # Train PCA
-        try:
-            mean_face, eigenfaces, coefficients, pca = train_eigenfaces(X, n_components=k_req)
-        except Exception as err:
-            if parent is not None:
-                show_error(parent, "PCA Training Error", str(err))
-            return None
-
-        # Ask destination to save model .npz file
-        save_path = ask_save_npz_file(
-            parent,
-            title="Save trained Eigenface model (.npz)",
-            initialfile="eigenface_model.npz",
+        X, labels, unique_names, thumbnails = load_face_dataset(
+            source=source,
+            folder_path="tests/data/faces" if Path("tests/data/faces").is_dir() else None,
+            target_size=(target_w, target_h),
+            min_faces_per_person=1,
+            subset="train",
         )
-        if save_path:
-            try:
-                save_eigenface_model(
-                    save_path,
-                    mean_face=mean_face,
-                    eigenfaces=eigenfaces,
-                    coefficients=coefficients,
-                    labels=labels,
-                    image_shape=(target_h, target_w),
-                    thumbnails=thumbnails,
-                    explained_variance_ratio=pca.explained_variance_ratio_,
-                )
-            except Exception as err:
-                if parent is not None:
-                    show_error(parent, "Save Error", f"Could not save model: {err}")
 
-        # Update session active model
+        mean_face, eigenfaces, coefficients, pca = train_eigenfaces(X, n_components=k_req)
         model_dict = {
             "mean_face": mean_face,
             "eigenfaces": eigenfaces,
+            "components": eigenfaces,
             "coefficients": coefficients,
             "labels": labels,
+            "target_names": unique_names,
             "image_shape": (target_h, target_w),
             "thumbnails": thumbnails,
             "explained_variance_ratio": pca.explained_variance_ratio_,
-            "filepath": str(save_path) if save_path else "In-memory session",
+            "k": len(eigenfaces),
         }
         set_active_model(model_dict)
 
-        # Render Eigenface visualization
         montage = render_eigenfaces_montage(
             mean_face=mean_face,
             eigenfaces=eigenfaces,
             image_shape=(target_h, target_w),
-            max_eigenfaces=11,
+            max_eigenfaces=12,
             explained_variance_ratio=pca.explained_variance_ratio_,
-        )
-
-        total_variance = float(np.sum(pca.explained_variance_ratio_)) * 100.0
-        details = {
-            "Operation": "PCA Eigenface Training",
-            "Dataset source": f"{source.upper()} ({Path(folder_path).name if folder_path else 'sklearn'})",
-            "Total training images": len(X),
-            "Unique identities": len(unique_names),
-            "Image dimensions (WxH)": f"{target_w} × {target_h}",
-            "Components (K)": len(eigenfaces),
-            "Total explained variance": f"{total_variance:.2f}%",
-            "Saved model": str(Path(save_path).name) if save_path else "In-memory active session",
-        }
-
-        message = (
-            f"Eigenface model built successfully: {len(X)} images, "
-            f"{len(unique_names)} persons, K={len(eigenfaces)} ({total_variance:.1f}% variance)."
+            include_mean=True,
         )
 
         return ToolResult(
             image=montage,
-            message=message,
-            details=details,
+            message=f"Eigenface model built: {len(X)} images, K={len(eigenfaces)}.",
+            details={"Operation": "PCA Eigenface Training", "Components (K)": len(eigenfaces)},
         )

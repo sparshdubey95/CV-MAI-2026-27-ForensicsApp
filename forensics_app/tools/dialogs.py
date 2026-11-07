@@ -334,20 +334,41 @@ def ask_template(
 
 
 MODEL_FILETYPES = [
+    ("NumPy binary model", "*.npy"),
     ("NumPy compressed archive", "*.npz"),
-    ("NumPy binary file", "*.npy"),
     ("All files", "*.*"),
 ]
 
 
-def ask_npz_file(parent: tk.Misc | None, title: str = "Select Eigenface model (.npz)") -> str | None:
-    """Ask user to select an existing model .npz file."""
+def ask_npy_file(parent: tk.Misc | None, title: str = "Select Eigenface model (.npy)") -> str | None:
+    """Ask user to select an existing model .npy or .npz file."""
     filename = filedialog.askopenfilename(
         parent=parent,
         title=title,
         filetypes=MODEL_FILETYPES,
     )
     return filename or None
+
+
+def ask_save_npy_file(
+    parent: tk.Misc | None,
+    title: str = "Save Eigenface model (.npy)",
+    initialfile: str = "eigenface_model.npy",
+) -> str | None:
+    """Ask user to specify destination for saving model .npy file."""
+    filename = filedialog.asksaveasfilename(
+        parent=parent,
+        title=title,
+        defaultextension=".npy",
+        initialfile=initialfile,
+        filetypes=MODEL_FILETYPES,
+    )
+    return filename or None
+
+
+def ask_npz_file(parent: tk.Misc | None, title: str = "Select Eigenface model (.npz)") -> str | None:
+    """Ask user to select an existing model .npz or .npy file."""
+    return ask_npy_file(parent=parent, title=title)
 
 
 def ask_save_npz_file(

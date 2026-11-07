@@ -29,10 +29,17 @@ from forensics_app.tools.face_detection import (
 )
 from forensics_app.tools.face_recognition import (
     FaceRecognitionTool,
+    lookup_ground_truth,
     preprocess_face_image,
     project_test_face,
     recognize_face,
     render_recognition_result,
+)
+from forensics_app.tools.eigenfaces import (
+    export_test_dataset,
+    compute_mean_face,
+    center_faces,
+    project_faces,
 )
 
 
@@ -295,6 +302,154 @@ class FaceRecognitionTests(unittest.TestCase):
         self.assertIn("Recognition complete", result.message)
         self.assertIn("Bob Jones", result.message)
         self.assertEqual(result.details["Predicted identity"], "Bob Jones")
+
+
+class Set6RebuildRequirementsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.work_dir = Path(self.temp_dir.name)
+
+        # Create distinct test faces
+        self.images = []
+        self.labels = []
+        for name, seed, tone in [
+            ("Alice Smith", 10, 190),
+            ("Bob Jones", 20, 110),
+            ("Charlie Brown", 30, 60),
+            ("Diana Prince", 40, 150),
+        ]:
+            for i in range(4):
+                img = create_synthetic_face(seed + i, size=(32, 32), tone=tone)
+                self.images.append(img.reshape(-1).astype(np.float32))
+                self.labels.append(name)
+
+        self.X = np.stack(self.images, axis=0)  # (16, 1024)
+        self.labels_arr = np.array(self.labels, dtype=object)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_save_and_load_npy_model(self) -> None:
+        """Test .npy model format serialization with all required metadata."""
+        mean_face, eigenfaces, coefficients, pca = train_eigenfaces(self.X, n_components=12)
+        save_path = self.work_dir / "eigenface_model.npy"
+
+        save_eigenface_model(
+            save_path,
+            mean_face=mean_face,
+            eigenfaces=eigenfaces,
+            coefficients=coefficients,
+            labels=self.labels_arr,
+            image_shape=(32, 32),
+            target_names=["Alice Smith", "Bob Jones", "Charlie Brown", "Diana Prince"],
+            thumbnails=self.X.reshape(-1, 32, 32).astype(np.uint8),
+            explained_variance_ratio=pca.explained_variance_ratio_,
+            k=12,
+        )
+        self.assertTrue(save_path.is_file())
+
+        loaded = load_eigenface_model(save_path)
+        self.assertIn("mean_face", loaded)
+        self.assertIn("components", loaded)
+        self.assertIn("eigenfaces", loaded)
+        self.assertIn("training_coefficients", loaded)
+        self.assertIn("coefficients", loaded)
+        self.assertIn("labels", loaded)
+        self.assertIn("target_names", loaded)
+        self.assertIn("dimensions", loaded)
+        self.assertIn("image_shape", loaded)
+        self.assertIn("k", loaded)
+        self.assertIn("metadata", loaded)
+
+        self.assertEqual(loaded["k"], 12)
+        self.assertEqual(loaded["image_shape"], (32, 32))
+        np.testing.assert_allclose(loaded["mean_face"], mean_face)
+        np.testing.assert_allclose(loaded["eigenfaces"], eigenfaces)
+        np.testing.assert_allclose(loaded["coefficients"], coefficients)
+
+    def test_export_test_images_and_manifest(self) -> None:
+        """Test exporting test images to LFW_Test_Images folder with labels.csv and manifest.json."""
+        test_dir = self.work_dir / "LFW_Test_Images"
+        test_imgs = self.X[:6].reshape(-1, 32, 32)
+        test_labels = self.labels_arr[:6]
+
+        csv_path, json_path = export_test_dataset(
+            images=test_imgs,
+            labels=test_labels,
+            export_dir=test_dir,
+        )
+
+        self.assertTrue(csv_path.is_file())
+        self.assertTrue(json_path.is_file())
+
+        # Verify manifest json
+        import json
+        with open(json_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertGreaterEqual(len(manifest), 6)
+
+        # Verify ground truth lookup
+        first_fname = list(manifest.keys())[0]
+        first_id = manifest[first_fname]
+        retrieved_id, is_known = lookup_ground_truth(test_dir / first_fname, search_dirs=[test_dir])
+        self.assertTrue(is_known)
+        self.assertEqual(retrieved_id, first_id)
+
+        # Verify unknown image lookup returns is_known=False
+        unknown_id, is_known = lookup_ground_truth(self.work_dir / "unknown_person.jpg", search_dirs=[test_dir])
+        self.assertFalse(is_known)
+        self.assertIsNone(unknown_id)
+
+    def test_train_test_separation_and_projection(self) -> None:
+        """Confirm training and testing separation: PCA trained on train only."""
+        # Train on first 12 images (3 per person)
+        X_train = self.X[::4]  # 4 images, one per person
+        y_train = self.labels_arr[::4]
+
+        # Test on remaining images
+        X_test = self.X[1::4]  # 4 test images
+        y_test = self.labels_arr[1::4]
+
+        mean_face, eigenfaces, train_weights, pca = train_eigenfaces(X_train, n_components=3)
+
+        # Model fitted solely on training images
+        self.assertEqual(len(train_weights), len(X_train))
+
+        # Project test image: w_test = U_K(x_test - μ)
+        model = {
+            "mean_face": mean_face,
+            "eigenfaces": eigenfaces,
+            "coefficients": train_weights,
+            "labels": y_train,
+            "image_shape": (32, 32),
+            "thumbnails": X_train.reshape(-1, 32, 32).astype(np.uint8),
+        }
+
+        # Recognize first test face
+        test_img = X_test[0].reshape((32, 32)).astype(np.uint8)
+        top_matches, w_test, _ = recognize_face(test_img, model, top_k=2)
+
+        self.assertEqual(len(top_matches), 2)
+        # Prediction should match training face with closest identity
+        self.assertEqual(top_matches[0]["name"], y_test[0])
+
+    def test_visualise_eigenfaces_montage_0_to_11(self) -> None:
+        """Verify eigenfaces montage renders first 12 eigenfaces."""
+        mean_face = np.zeros(1024, dtype=np.float32)
+        eigenfaces = np.random.randn(12, 1024).astype(np.float32)
+        ratios = np.ones(12, dtype=np.float32) / 12.0
+
+        montage = render_eigenfaces_montage(
+            mean_face=mean_face,
+            eigenfaces=eigenfaces,
+            image_shape=(32, 32),
+            max_eigenfaces=12,
+            explained_variance_ratio=ratios,
+            include_mean=True,
+        )
+        self.assertIsInstance(montage, Image.Image)
+        self.assertGreater(montage.width, 200)
+        self.assertGreater(montage.height, 200)
 
 
 class Set6RegistrationTests(unittest.TestCase):
