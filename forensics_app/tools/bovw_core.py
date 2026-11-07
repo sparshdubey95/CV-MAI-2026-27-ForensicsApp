@@ -501,10 +501,7 @@ def compute_dataset_histograms(
         try:
             with Image.open(path) as opened:
                 img = opened.copy()
-            desc = extract_descriptors(img, method=method)
-            if len(desc) == 0:
-                raise ValueError(f"No {method.upper()} features were found.")
-            hist = compute_bovw_histogram(desc, codebook, normalize=True)
+            _, _, hist, _ = map_features_to_codebook(img, codebook, method=method, max_keypoints=150)
             histograms.append(hist)
             valid_paths.append(path)
         except Exception as err:
@@ -609,14 +606,11 @@ def classify_single_image(
     class_names: list[str],
     method: str = "SIFT",
 ) -> tuple[str, dict[str, float], np.ndarray]:
-    """Classify a single input image and return predicted class, calibrated probabilities, and BoVW histogram."""
-    desc = extract_descriptors(image, method=method)
-    if len(desc) == 0:
-        raise ValueError(
-            f"No {method.upper()} features were found in this image. "
-            "Choose a larger or more textured image and try again."
-        )
-    hist = compute_bovw_histogram(desc, codebook, normalize=True)
+    """Classify a single input image and return predicted class, calibrated probabilities, and BoVW histogram.
+
+    Uses the exact same feature extraction and explicit feature-to-centroid mapping pipeline as Section 7.2.
+    """
+    _, _, hist, _ = map_features_to_codebook(image, codebook, method=method, max_keypoints=150)
 
     hist_scaled = scaler.transform(hist.reshape(1, -1))
     predicted_class = str(classifier.predict(hist_scaled)[0])
@@ -803,33 +797,13 @@ def render_test_image_histogram_mapping(
     class_name: str = "Unknown",
     image_title: str = "Test Image",
     max_mapping_lines: int = 120,
+    prediction_text: str | None = None,
+    probabilities: dict[str, float] | None = None,
 ) -> Image.Image:
-    """Render Set 7.2 layout matching the reference format:
-    Display the test image with its extracted feature keypoints on the left,
+    """Render Section 7.2 / 7.3 layout matching the reference format:
+    Display the test or new image with its extracted feature keypoints on the left,
     and draw mapping lines connecting each feature point to its closest centroid/bin
-    in the frequency histogram on the right.
-
-    Parameters
-    ----------
-    image : Image.Image | np.ndarray
-        Held-out test image.
-    kps_coords : np.ndarray
-        (N, 2) array of (x, y) keypoint positions on the image.
-    assigned_centroids : np.ndarray
-        (N,) array of centroid indices in [0, K-1] that each feature was mapped to.
-    histogram : np.ndarray
-        (K,) normalized frequency histogram vector.
-    class_name : str
-        Category name of the test image.
-    image_title : str
-        Name or description of the test image.
-    max_mapping_lines : int
-        Maximum number of connection lines to draw to avoid visual clutter.
-
-    Returns
-    -------
-    Image.Image
-        The rendered PIL Image.
+    in the frequency histogram on the right. Optionally overlays prediction badge.
     """
     k = len(histogram)
     fig, (ax_img, ax_hist) = plt.subplots(
@@ -837,7 +811,7 @@ def render_test_image_histogram_mapping(
     )
     fig.patch.set_facecolor("#ffffff")
 
-    # Panel 1: Test Image with Keypoints ─────────────────────────────────────
+    # Panel 1: Image with Keypoints ──────────────────────────────────────────
     if isinstance(image, Image.Image):
         img_arr = np.array(image.convert("RGB"))
     elif image.ndim == 2:
@@ -846,8 +820,12 @@ def render_test_image_histogram_mapping(
         img_arr = image
 
     ax_img.imshow(img_arr)
-    title_text = class_name.lower() if class_name and class_name.lower() != "unknown" else image_title
-    ax_img.set_title(title_text, fontsize=12, pad=8)
+    base_title = class_name.lower() if class_name and class_name.lower() != "unknown" else image_title
+    if prediction_text:
+        img_title_str = f"{prediction_text}\n{base_title}" if base_title else prediction_text
+        ax_img.set_title(img_title_str, fontsize=12, fontweight="bold", pad=8)
+    else:
+        ax_img.set_title(base_title, fontsize=12, pad=8)
     ax_img.axis("off")
 
     n_points = len(kps_coords)
@@ -888,6 +866,27 @@ def render_test_image_histogram_mapping(
     for spine in ax_hist.spines.values():
         spine.set_color("#333333")
         spine.set_linewidth(0.8)
+
+    # If prediction badge is supplied, display summary text
+    if prediction_text:
+        ax_hist.text(
+            0.5,
+            0.92,
+            f"Prediction: {prediction_text}",
+            transform=ax_hist.transAxes,
+            ha="center",
+            va="center",
+            fontsize=10,
+            fontweight="bold",
+            color="white",
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="#28a745", edgecolor="black"),
+            zorder=6,
+        )
+        if probabilities:
+            prob_str = " | ".join(f"p({c}) = {p:.2f}" for c, p in sorted(probabilities.items()))
+            plt.suptitle(f"BoVW Classification: {prediction_text}   [{prob_str}]", fontsize=11, fontweight="bold", y=0.99)
+        else:
+            plt.suptitle(f"BoVW Classification: {prediction_text}", fontsize=11, fontweight="bold", y=0.99)
 
     # Mapping lines: each feature point connected to its closest centroid bin ─
     if n_points > 0:

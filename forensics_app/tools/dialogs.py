@@ -666,28 +666,41 @@ def show_bovw_classification_dialog(
     scaler: Any,
     class_names: list[str],
     histogram: Any,
+    kps_coords: Any = None,
+    assigned_centroids: Any = None,
     visual_word_patches: Any = None,
 ) -> tuple[str, dict[str, float], Any] | None:
     """Section 7.3 interactive classification dialog for new images.
 
-    Displays the computed histogram for the new image first, places a clear
+    Displays the computed histogram for the new image first (using the exact same
+    histogram pipeline and visualization layout as Section 7.2), places a clear
     'Classify' button at the bottom, and upon clicking executes the classifier
     to display the predicted class and top probability score (e.g. p(kangaroo) = 0.64).
     """
     from PIL import Image, ImageTk
-    from .bovw_core import classify_single_image, render_image_and_histogram
+    import numpy as np
+    from .bovw_core import render_test_image_histogram_mapping
 
     if parent is None:
-        pred, probs, _ = classify_single_image(
-            target_image, codebook, classifier, scaler, class_names, method="SIFT"
-        )
-        final_fig = render_image_and_histogram(
+        hist_scaled = scaler.transform(histogram.reshape(1, -1))
+        pred = str(classifier.predict(hist_scaled)[0])
+        proba_vector = classifier.predict_proba(hist_scaled)[0]
+        clf_classes = list(classifier.classes_)
+        probs = {
+            c_name: float(proba_vector[clf_classes.index(c_name)]) if c_name in clf_classes else 0.0
+            for c_name in class_names
+        }
+        top_p = probs.get(pred, 0.0)
+        final_fig = render_test_image_histogram_mapping(
             image=target_image,
+            kps_coords=kps_coords if kps_coords is not None else np.empty((0, 2)),
+            assigned_centroids=assigned_centroids if assigned_centroids is not None else np.empty((0,)),
             histogram=histogram,
+            class_name=pred,
             image_title=image_name,
+            max_mapping_lines=120,
+            prediction_text=f"p({pred}) = {top_p:.2f}",
             probabilities=probs,
-            predicted_class=pred,
-            visual_word_patches=visual_word_patches,
         )
         return pred, probs, final_fig
 
@@ -743,7 +756,7 @@ def show_bovw_classification_dialog(
     badge_frame.pack(fill="x", pady=(0, 8))
 
     status_var = tk.StringVar(
-        value="Histogram of visual words computed for this new image. Click the 'Classify' button to execute the classifier."
+        value="Histogram of visual words computed using Section 7.2 mapping pipeline. Click the 'Classify' button to execute the classifier."
     )
     status_label = ttk.Label(
         badge_frame,
@@ -769,14 +782,17 @@ def show_bovw_classification_dialog(
 
     def on_classify() -> None:
         try:
-            pred_class, probabilities, _ = classify_single_image(
-                image=target_image,
-                codebook=codebook,
-                classifier=classifier,
-                scaler=scaler,
-                class_names=class_names,
-                method="SIFT",
-            )
+            hist_scaled = scaler.transform(histogram.reshape(1, -1))
+            pred_class = str(classifier.predict(hist_scaled)[0])
+            proba_vector = classifier.predict_proba(hist_scaled)[0]
+            clf_classes = list(classifier.classes_)
+            probabilities: dict[str, float] = {}
+            for c_name in class_names:
+                if c_name in clf_classes:
+                    idx = clf_classes.index(c_name)
+                    probabilities[c_name] = float(proba_vector[idx])
+                else:
+                    probabilities[c_name] = 0.0
         except Exception as err:
             status_var.set(f"Classification failed: {err}")
             status_label.configure(foreground="#cc0000")
@@ -795,13 +811,16 @@ def show_bovw_classification_dialog(
             font=("TkDefaultFont", 9, "bold"),
         )
 
-        classified_fig = render_image_and_histogram(
+        classified_fig = render_test_image_histogram_mapping(
             image=target_image,
+            kps_coords=kps_coords if kps_coords is not None else np.empty((0, 2)),
+            assigned_centroids=assigned_centroids if assigned_centroids is not None else np.empty((0,)),
             histogram=histogram,
+            class_name=pred_class,
             image_title=image_name,
+            max_mapping_lines=120,
+            prediction_text=f"p({pred_class}) = {top_prob:.2f}",
             probabilities=probabilities,
-            predicted_class=pred_class,
-            visual_word_patches=visual_word_patches,
         )
         current_fig[0] = classified_fig
         _update_displayed_image(classified_fig)

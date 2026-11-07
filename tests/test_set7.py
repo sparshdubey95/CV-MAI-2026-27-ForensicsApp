@@ -302,6 +302,25 @@ class BoVWCoreTests(unittest.TestCase):
         self.assertIn("p(", result.message)
         self.assertIsInstance(result.image, Image.Image)
 
+    def test_section_7_2_and_7_3_histogram_pipeline_identical(self) -> None:
+        """Section 7.3 must use the exact same feature extraction and mapping pipeline as 7.2."""
+        image = create_pattern_image(0, 3, size=110)
+        codebook = np.random.RandomState(42).randn(30, 128).astype(np.float32)
+
+        kps_72, assigned_72, hist_72, _ = map_features_to_codebook(image, codebook, method="SIFT", max_keypoints=150)
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.svm import SVC
+        clf = SVC(probability=True).fit(np.eye(30)[:3], ["a", "b", "c"])
+        scaler = StandardScaler().fit(np.eye(30)[:3])
+        _, _, hist_classify = classify_single_image(
+            image, codebook,
+            classifier=clf,
+            scaler=scaler,
+            class_names=["a", "b", "c"],
+            method="SIFT",
+        )
+        np.testing.assert_allclose(hist_72, hist_classify, rtol=1e-5, atol=1e-5)
+
     def test_bovw_histogram_tool_test_images_only(self) -> None:
         """Section 7.2: Histogram visualizer strictly restricted to test images."""
         image_paths, labels, class_names = scan_dataset(self.dataset_dir)

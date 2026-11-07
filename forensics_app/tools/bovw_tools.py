@@ -480,26 +480,28 @@ class BoVWClassifierTool(ForensicsTool):
         class_names = model["class_names"]
         method = model.get("method", "SIFT")
 
-        # 3. Workflow: Compute SIFT descriptors and compute BoVW histogram first
+        # 3. Use the exact same feature extraction, mapping, and histogram pipeline as Section 7.2
         try:
-            desc = extract_descriptors(target_image, method=method)
-            if len(desc) == 0:
-                raise ValueError(
-                    f"No {method.upper()} features were found in this image. "
-                    "Choose a larger or more textured image and try again."
-                )
-            hist = compute_bovw_histogram(desc, codebook, normalize=True)
+            kps_coords, assigned_centroids, hist, kps = map_features_to_codebook(
+                image=target_image,
+                codebook=codebook,
+                method=method,
+                max_keypoints=150,
+            )
         except Exception as err:
             if parent is not None:
-                show_error(parent, "Feature Extraction Error", str(err))
+                show_error(parent, "Feature Extraction / Mapping Error", str(err))
             return None
 
-        initial_fig = render_image_and_histogram(
+        # Display this exact 7.2 histogram visualizer first before the user clicks "Classify"
+        initial_fig = render_test_image_histogram_mapping(
             image=target_image,
+            kps_coords=kps_coords,
+            assigned_centroids=assigned_centroids,
             histogram=hist,
-            class_name="Unknown",
+            class_name="",
             image_title=image_name,
-            visual_word_patches=model.get("visual_word_patches"),
+            max_mapping_lines=120,
         )
 
         # 4. Display computed histogram first, with 'Classify' button at bottom to execute classifier
@@ -514,28 +516,33 @@ class BoVWClassifierTool(ForensicsTool):
                 scaler=scaler,
                 class_names=class_names,
                 histogram=hist,
+                kps_coords=kps_coords,
+                assigned_centroids=assigned_centroids,
                 visual_word_patches=model.get("visual_word_patches"),
             )
             if dialog_res is None:
                 return None
             pred_class, probabilities, final_fig = dialog_res
         else:
-            pred_class, probabilities, _ = classify_single_image(
+            hist_scaled = scaler.transform(hist.reshape(1, -1))
+            pred_class = str(classifier.predict(hist_scaled)[0])
+            proba_vector = classifier.predict_proba(hist_scaled)[0]
+            clf_classes = list(classifier.classes_)
+            probabilities = {
+                c_name: float(proba_vector[clf_classes.index(c_name)]) if c_name in clf_classes else 0.0
+                for c_name in class_names
+            }
+            top_prob = probabilities.get(pred_class, 0.0)
+            final_fig = render_test_image_histogram_mapping(
                 image=target_image,
-                codebook=codebook,
-                classifier=classifier,
-                scaler=scaler,
-                class_names=class_names,
-                method=method,
-            )
-            final_fig = render_image_and_histogram(
-                image=target_image,
+                kps_coords=kps_coords,
+                assigned_centroids=assigned_centroids,
                 histogram=hist,
-                class_name="Unknown",
+                class_name=pred_class,
                 image_title=image_name,
+                max_mapping_lines=120,
+                prediction_text=f"p({pred_class}) = {top_prob:.2f}",
                 probabilities=probabilities,
-                predicted_class=pred_class,
-                visual_word_patches=model.get("visual_word_patches"),
             )
 
         top_prob = probabilities.get(pred_class, 0.0)
