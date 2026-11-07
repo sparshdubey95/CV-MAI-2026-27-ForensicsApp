@@ -18,10 +18,13 @@ from forensics_app.tools.bovw_core import (
     compute_dataset_histograms,
     evaluate_bovw_classifier,
     extract_descriptors,
+    extract_keypoints_and_descriptors,
     load_bovw_bundle,
+    map_features_to_codebook,
     render_codebook_visualization,
     render_confusion_matrix_figure,
     render_image_and_histogram,
+    render_test_image_histogram_mapping,
     save_bovw_bundle,
     scan_dataset,
     set_active_bovw_model,
@@ -29,6 +32,7 @@ from forensics_app.tools.bovw_core import (
     split_dataset,
     train_bovw_classifier,
 )
+from forensics_app.tools.dialogs import ask_bovw_codebook_parameters
 from forensics_app.tools.bovw_tools import (
     BoVWClassifierTool,
     BoVWCodebookTool,
@@ -214,6 +218,121 @@ class BoVWCoreTests(unittest.TestCase):
         cm = np.array([[5, 0, 0], [1, 4, 0], [0, 1, 4]])
         vis_cm = render_confusion_matrix_figure(cm, self.classes, accuracy=0.87)
         self.assertIsInstance(vis_cm, Image.Image)
+
+    def test_ask_bovw_codebook_parameters_locked_defaults(self) -> None:
+        """Section 7.1: UI locks visual words to 30 and method to SIFT."""
+        res = ask_bovw_codebook_parameters(None, ["butterfly", "kangaroo", "dalmatian"], default_split=0.25)
+        self.assertIsNotNone(res)
+        k, method, split = res
+        self.assertEqual(k, 30)
+        self.assertEqual(method, "SIFT")
+        self.assertEqual(split, 0.25)
+
+    def test_extract_keypoints_and_descriptors(self) -> None:
+        """Section 7.1: Clean keypoint and SIFT descriptor extraction."""
+        test_img = create_pattern_image(0, 0, size=120)
+        kps, descs = extract_keypoints_and_descriptors(test_img, method="SIFT", max_keypoints=100)
+        self.assertGreater(len(kps), 0)
+        self.assertEqual(len(kps), len(descs))
+        self.assertEqual(descs.shape[1], 128)
+
+    def test_map_features_to_codebook_explicit_mapping(self) -> None:
+        """Section 7.2: Explicit feature-to-closest-centroid mapping and K-dim histogram."""
+        test_img = create_pattern_image(1, 1, size=120)
+        k = 30
+        codebook = np.random.randn(k, 128).astype(np.float32)
+        kps_coords, assigned, hist, kps = map_features_to_codebook(
+            test_img, codebook, method="SIFT", max_keypoints=80
+        )
+        self.assertEqual(kps_coords.shape[0], len(assigned))
+        self.assertEqual(kps_coords.shape[1], 2)
+        self.assertEqual(len(hist), k)
+        self.assertAlmostEqual(float(np.sum(hist)), 1.0, places=4)
+        self.assertTrue(np.all(assigned >= 0) and np.all(assigned < k))
+
+    def test_render_test_image_histogram_mapping(self) -> None:
+        """Section 7.2: Visualization layout with test image on left, histogram on right, and mapping lines."""
+        test_img = create_pattern_image(2, 0, size=120)
+        k = 30
+        n_pts = 25
+        kps_coords = np.random.uniform(10, 110, size=(n_pts, 2)).astype(np.float32)
+        assigned = np.random.randint(0, k, size=n_pts)
+        counts = np.bincount(assigned, minlength=k).astype(np.float32)
+        hist = counts / np.sum(counts)
+
+        vis = render_test_image_histogram_mapping(
+            image=test_img,
+            kps_coords=kps_coords,
+            assigned_centroids=assigned,
+            histogram=hist,
+            class_name="dalmatian",
+            image_title="test_dalmatian.jpg",
+        )
+        self.assertIsInstance(vis, Image.Image)
+
+    def test_bovw_classifier_tool_new_image_inference(self) -> None:
+        """Section 7.3: Image classifier for new/external images displaying top probability."""
+        image_paths, labels, class_names = scan_dataset(self.dataset_dir)
+        train_p, train_l, _, _ = split_dataset(image_paths, labels, test_size=0.25, random_state=42)
+
+        codebook, _, _, _ = build_codebook(train_p, k=15, method="SIFT", random_state=42)
+        X_train, _ = compute_dataset_histograms(train_p, codebook, method="SIFT")
+        clf, scaler = train_bovw_classifier(X_train, train_l, class_names, random_state=42)
+
+        model = {
+            "codebook": codebook,
+            "classifier": clf,
+            "scaler": scaler,
+            "class_names": class_names,
+            "method": "SIFT",
+            "k": 15,
+        }
+        set_active_bovw_model(model)
+
+        doc = ImageDocument()
+        new_img = create_pattern_image(1, 4, size=100)
+        new_path = self.dataset_dir / "query.jpg"
+        new_img.save(new_path)
+        doc.load(new_path)
+
+        tool = BoVWClassifierTool()
+        result = tool.run(None, doc)
+        self.assertIsNotNone(result)
+        self.assertIn("Top Probability Score", result.details)
+        self.assertIn("p(", result.message)
+        self.assertIsInstance(result.image, Image.Image)
+
+    def test_bovw_histogram_tool_test_images_only(self) -> None:
+        """Section 7.2: Histogram visualizer strictly restricted to test images."""
+        image_paths, labels, class_names = scan_dataset(self.dataset_dir)
+        train_p, train_l, test_p, test_l = split_dataset(image_paths, labels, test_size=0.33, random_state=42)
+
+        codebook, _, _, _ = build_codebook(train_p, k=15, method="SIFT", random_state=42)
+        split_info = {
+            "train_paths": [str(p) for p in train_p],
+            "train_labels": train_l,
+            "test_paths": [str(p) for p in test_p],
+            "test_labels": test_l,
+            "dataset_root": str(self.dataset_dir),
+        }
+        model = {
+            "codebook": codebook,
+            "class_names": class_names,
+            "method": "SIFT",
+            "k": 15,
+            "split_info": split_info,
+        }
+        set_active_bovw_model(model)
+        set_active_bovw_split(split_info)
+
+        tool = BoVWHistogramTool()
+        doc = ImageDocument()
+        result = tool.run(None, doc)
+
+        self.assertIsNotNone(result)
+        self.assertIn("Keypoints mapped", result.details)
+        self.assertIn("Target test image", result.details)
+        self.assertIsInstance(result.image, Image.Image)
 
 
 class Set7RegistrationTests(unittest.TestCase):

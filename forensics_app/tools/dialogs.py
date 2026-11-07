@@ -494,25 +494,26 @@ def ask_bovw_codebook_parameters(
     class_names: list[str],
     default_split: float = 0.25,
 ) -> tuple[int, str, float] | None:
-    """Dialog displaying detected categories and allowing configuration of K, method, and test split."""
-    c_count = len(class_names)
-    recommended_k = 10 * c_count  # Coursework requirement: K = 10 * number of classes (K=30 for 3 classes)
+    """Dialog displaying detected categories and allowing configuration of test split ratio.
 
-    def _parse(k_str: str, method_val: str, split_str: str) -> tuple[int, str, float]:
-        k = int(k_str.strip())
-        if k < 2:
-            raise ValueError("K (visual words) must be at least 2.")
+    Locks visual words (codebook size) to 30 and descriptor method to SIFT per coursework requirements.
+    """
+    c_count = len(class_names)
+    locked_k = 30
+    locked_method = "SIFT"
+
+    def _parse(split_str: str) -> tuple[int, str, float]:
         split = float(split_str.strip())
         if not (0.05 <= split <= 0.5):
             raise ValueError("Test split ratio must be between 0.05 and 0.5 (e.g. 0.25).")
-        return k, method_val, split
+        return locked_k, locked_method, split
 
     if parent is None:
-        return recommended_k, "SIFT", default_split
+        return locked_k, locked_method, default_split
 
     result: dict[str, tuple[int, str, float] | None] = {"value": None}
     window = tk.Toplevel(parent)
-    window.title("BoVW Codebook Configuration")
+    window.title("BoVW Codebook Configuration (Set 7.1)")
     window.transient(parent)
     window.resizable(False, False)
 
@@ -521,42 +522,44 @@ def ask_bovw_codebook_parameters(
 
     ttk.Label(
         frame,
-        text=f"Detected {c_count} Classes: {', '.join(class_names)}",
+        text=f"Detected {c_count} Categories: {', '.join(class_names)}",
         font=("TkDefaultFont", 10, "bold"),
         foreground="#0055aa",
     ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
-    k_var = tk.StringVar(value=str(recommended_k))
-    method_var = tk.StringVar(value="SIFT")
     split_var = tk.StringVar(value=str(default_split))
 
-    ttk.Label(frame, text=f"Visual Words (K = 10 × {c_count}):").grid(
+    # Locked detector & descriptor
+    ttk.Label(frame, text="Feature Descriptor:").grid(
         row=1, column=0, sticky="w", pady=(0, 6)
     )
-    ttk.Entry(frame, textvariable=k_var, width=14).grid(
-        row=1, column=1, sticky="e", padx=(12, 0), pady=(0, 6)
-    )
+    ttk.Label(
+        frame,
+        text="SIFT (locked to default coursework requirement)",
+        font=("TkDefaultFont", 9, "italic"),
+        foreground="#444444",
+    ).grid(row=1, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
 
-    ttk.Label(frame, text="Descriptor Method:").grid(
+    # Locked visual words count (30)
+    ttk.Label(frame, text="Visual Words (Codebook Size):").grid(
         row=2, column=0, sticky="w", pady=(0, 6)
     )
-    combo_method = ttk.Combobox(
+    ttk.Label(
         frame,
-        textvariable=method_var,
-        values=["SIFT", "ORB"],
-        state="readonly",
-        width=12,
-    )
-    combo_method.grid(row=2, column=1, sticky="e", padx=(12, 0), pady=(0, 6))
+        text="30 (locked to default coursework requirement)",
+        font=("TkDefaultFont", 9, "italic"),
+        foreground="#444444",
+    ).grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
 
-    ttk.Label(frame, text="Test Set Ratio (e.g. 0.25 = 25%):").grid(
+    # Test set ratio configuration
+    ttk.Label(frame, text="Held-Out Test Set Ratio:").grid(
         row=3, column=0, sticky="w", pady=(0, 6)
     )
     ttk.Entry(frame, textvariable=split_var, width=14).grid(
-        row=3, column=1, sticky="e", padx=(12, 0), pady=(0, 6)
+        row=3, column=1, sticky="w", padx=(12, 0), pady=(0, 6)
     )
 
-    error_label = ttk.Label(frame, text="", foreground="red", wraplength=320)
+    error_label = ttk.Label(frame, text="", foreground="red", wraplength=340)
     error_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
     buttons = ttk.Frame(frame)
@@ -564,7 +567,7 @@ def ask_bovw_codebook_parameters(
 
     def confirm() -> None:
         try:
-            parsed = _parse(k_var.get(), method_var.get(), split_var.get())
+            parsed = _parse(split_var.get())
         except ValueError as err:
             error_label.configure(text=str(err))
             return
@@ -651,5 +654,177 @@ def ask_bovw_select_test_image(
     window.grab_set()
     window.wait_window()
     return chosen["index"]
+
+
+def show_bovw_classification_dialog(
+    parent: tk.Misc | None,
+    image_name: str,
+    initial_fig: Any,
+    target_image: Any,
+    codebook: Any,
+    classifier: Any,
+    scaler: Any,
+    class_names: list[str],
+    histogram: Any,
+    visual_word_patches: Any = None,
+) -> tuple[str, dict[str, float], Any] | None:
+    """Section 7.3 interactive classification dialog for new images.
+
+    Displays the computed histogram for the new image first, places a clear
+    'Classify' button at the bottom, and upon clicking executes the classifier
+    to display the predicted class and top probability score (e.g. p(kangaroo) = 0.64).
+    """
+    from PIL import Image, ImageTk
+    from .bovw_core import classify_single_image, render_image_and_histogram
+
+    if parent is None:
+        pred, probs, _ = classify_single_image(
+            target_image, codebook, classifier, scaler, class_names, method="SIFT"
+        )
+        final_fig = render_image_and_histogram(
+            image=target_image,
+            histogram=histogram,
+            image_title=image_name,
+            probabilities=probs,
+            predicted_class=pred,
+            visual_word_patches=visual_word_patches,
+        )
+        return pred, probs, final_fig
+
+    result_data: dict[str, tuple[str, dict[str, float], Any] | None] = {"value": None}
+    current_fig: list[Any] = [initial_fig]
+
+    window = tk.Toplevel(parent)
+    window.title(f"Image Classification (Set 7.3) — {image_name}")
+    window.transient(parent)
+    window.geometry("980x620")
+    window.minsize(800, 500)
+
+    main_frame = ttk.Frame(window, padding=12)
+    main_frame.pack(fill="both", expand=True)
+
+    header_frame = ttk.Frame(main_frame)
+    header_frame.pack(fill="x", pady=(0, 6))
+
+    ttk.Label(
+        header_frame,
+        text=f"New Query Image: {image_name}",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#003366",
+    ).pack(side="left")
+
+    step_info = ttk.Label(
+        header_frame,
+        text="[Step 1 of 2: BoVW Histogram Computed. Click 'Classify' below to identify category]",
+        font=("TkDefaultFont", 9, "italic"),
+        foreground="#555555",
+    )
+    step_info.pack(side="right")
+
+    img_container = ttk.Frame(main_frame, borderwidth=1, relief="solid")
+    img_container.pack(fill="both", expand=True, pady=(4, 8))
+
+    img_label = ttk.Label(img_container)
+    img_label.pack(fill="both", expand=True)
+
+    def _update_displayed_image(pil_img: Any) -> None:
+        max_w, max_h = 940, 420
+        w, h = pil_img.size
+        scale = min(max_w / w, max_h / h, 1.0)
+        disp_w, disp_h = int(w * scale), int(h * scale)
+        resized = pil_img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)
+        img_label.configure(image=photo)
+        img_label.image = photo
+
+    _update_displayed_image(initial_fig)
+
+    badge_frame = ttk.Frame(main_frame, padding=(8, 6))
+    badge_frame.pack(fill="x", pady=(0, 8))
+
+    status_var = tk.StringVar(
+        value="Histogram of visual words computed for this new image. Click the 'Classify' button to execute the classifier."
+    )
+    status_label = ttk.Label(
+        badge_frame,
+        textvariable=status_var,
+        font=("TkDefaultFont", 10, "bold"),
+        foreground="#0055aa",
+        wraplength=940,
+    )
+    status_label.pack(anchor="w")
+
+    prob_details_var = tk.StringVar(value="")
+    prob_details_label = ttk.Label(
+        badge_frame,
+        textvariable=prob_details_var,
+        font=("TkDefaultFont", 9),
+        foreground="#333333",
+        wraplength=940,
+    )
+    prob_details_label.pack(anchor="w", pady=(2, 0))
+
+    btn_frame = ttk.Frame(main_frame)
+    btn_frame.pack(fill="x", pady=(4, 0))
+
+    def on_classify() -> None:
+        try:
+            pred_class, probabilities, _ = classify_single_image(
+                image=target_image,
+                codebook=codebook,
+                classifier=classifier,
+                scaler=scaler,
+                class_names=class_names,
+                method="SIFT",
+            )
+        except Exception as err:
+            status_var.set(f"Classification failed: {err}")
+            status_label.configure(foreground="#cc0000")
+            return
+
+        top_prob = probabilities.get(pred_class, 0.0)
+        status_var.set(f"Predicted Class: {pred_class}   |   Top Score: p({pred_class}) = {top_prob:.2f}")
+        status_label.configure(foreground="#155724")
+
+        prob_str = "   •   ".join(f"p({c}) = {p:.2f}" for c, p in sorted(probabilities.items()))
+        prob_details_var.set(f"Class Probabilities: {prob_str}")
+
+        step_info.configure(
+            text="[Step 2 of 2: Classification Complete]",
+            foreground="#155724",
+            font=("TkDefaultFont", 9, "bold"),
+        )
+
+        classified_fig = render_image_and_histogram(
+            image=target_image,
+            histogram=histogram,
+            image_title=image_name,
+            probabilities=probabilities,
+            predicted_class=pred_class,
+            visual_word_patches=visual_word_patches,
+        )
+        current_fig[0] = classified_fig
+        _update_displayed_image(classified_fig)
+
+        classify_btn.configure(text="Classified ✓", state="disabled")
+        result_data["value"] = (pred_class, probabilities, classified_fig)
+
+    def on_close() -> None:
+        window.destroy()
+
+    classify_btn = ttk.Button(
+        btn_frame,
+        text="Classify Image",
+        command=on_classify,
+    )
+    classify_btn.pack(side="left", padx=(0, 8), ipadx=12, ipady=4)
+
+    ttk.Button(btn_frame, text="Close", command=on_close).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_close)
+    window.grab_set()
+    window.wait_window()
+
+    return result_data["value"]
 
 

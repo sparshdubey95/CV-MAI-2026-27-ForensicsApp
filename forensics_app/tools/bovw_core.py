@@ -15,6 +15,7 @@ This module implements:
 from __future__ import annotations
 
 import io
+from collections import Counter
 from pathlib import Path
 import random
 from typing import Any
@@ -25,11 +26,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+from matplotlib.patches import ConnectionPatch
 import numpy as np
 from PIL import Image
 from scipy.spatial.distance import cdist
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
+from sklearn.cluster import MiniBatchKMeans
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -147,10 +148,22 @@ def split_dataset(
     -------
     train_paths, train_labels, test_paths, test_labels
     """
+    if len(image_paths) != len(labels):
+        raise ValueError("Image paths and labels must have the same number of entries.")
     if len(image_paths) < 4:
         raise ValueError("Dataset has too few images to split into train and test sets.")
+    if not 0 < test_size < 1:
+        raise ValueError("Test set ratio must be greater than 0 and less than 1.")
+    class_counts = Counter(labels)
+    underrepresented = sorted(label for label, count in class_counts.items() if count < 2)
+    if underrepresented:
+        raise ValueError(
+            "Each category needs at least 2 images for a train/test split. "
+            f"Too few images for: {', '.join(underrepresented)}."
+        )
 
-    # Try stratified split first to preserve class proportions
+    # Keep every category represented in both sets. A random fallback can make
+    # the evaluation invalid by putting an entire category in only one set.
     try:
         train_p, test_p, train_l, test_l = train_test_split(
             image_paths,
@@ -159,31 +172,31 @@ def split_dataset(
             stratify=labels,
             random_state=random_state,
         )
-    except ValueError:
-        # Fallback to non-stratified if some class has very few samples (e.g. 1)
-        train_p, test_p, train_l, test_l = train_test_split(
-            image_paths,
-            labels,
-            test_size=test_size,
-            random_state=random_state,
-        )
+    except ValueError as err:
+        raise ValueError(
+            "Cannot create a stratified train/test split with the current image "
+            "counts and test ratio. Add more images per category or adjust the ratio."
+        ) from err
 
     return list(train_p), list(train_l), list(test_p), list(test_l)
 
 
-def extract_descriptors(
+def extract_keypoints_and_descriptors(
     image: Image.Image | np.ndarray,
     method: str = "SIFT",
     max_keypoints: int = 500,
-) -> np.ndarray:
-    """Extract local descriptors (SIFT 128-d or ORB 32-d) from an image.
+    contrast_threshold: float = 0.04,
+    edge_threshold: float = 10.0,
+) -> tuple[list[cv2.KeyPoint], np.ndarray]:
+    """Extract local keypoints and feature descriptors (SIFT 128-d or ORB 32-d) from an image.
 
     Returns
     -------
-    np.ndarray
+    keypoints : list[cv2.KeyPoint]
+        List of detected cv2.KeyPoint instances.
+    descriptors : np.ndarray
         (M, D) float32 descriptor matrix, where M is number of keypoints.
     """
-    # Convert input to grayscale uint8
     if isinstance(image, Image.Image):
         gray = np.array(image.convert("L"), dtype=np.uint8)
     elif isinstance(image, np.ndarray):
@@ -199,19 +212,33 @@ def extract_descriptors(
     method_upper = method.upper()
 
     if method_upper == "SIFT":
-        sift = cv2.SIFT_create(nfeatures=max_keypoints)
-        _, descriptors = sift.detectAndCompute(gray, None)
+        sift = cv2.SIFT_create(
+            nfeatures=max_keypoints,
+            contrastThreshold=contrast_threshold,
+            edgeThreshold=edge_threshold,
+        )
+        kps, descriptors = sift.detectAndCompute(gray, None)
     elif method_upper == "ORB":
         orb = cv2.ORB_create(nfeatures=max_keypoints)
-        _, descriptors = orb.detectAndCompute(gray, None)
+        kps, descriptors = orb.detectAndCompute(gray, None)
     else:
         raise ValueError(f"Unsupported descriptor method '{method}'. Choose 'SIFT' or 'ORB'.")
 
-    if descriptors is None or len(descriptors) == 0:
-        d_len = 128 if method_upper == "SIFT" else 32
-        return np.empty((0, d_len), dtype=np.float32)
+    d_len = 128 if method_upper == "SIFT" else 32
+    if kps is None or descriptors is None or len(descriptors) == 0:
+        return [], np.empty((0, d_len), dtype=np.float32)
 
-    return descriptors.astype(np.float32)
+    return list(kps), descriptors.astype(np.float32)
+
+
+def extract_descriptors(
+    image: Image.Image | np.ndarray,
+    method: str = "SIFT",
+    max_keypoints: int = 500,
+) -> np.ndarray:
+    """Extract local descriptors (SIFT 128-d or ORB 32-d) from an image."""
+    _, descs = extract_keypoints_and_descriptors(image, method=method, max_keypoints=max_keypoints)
+    return descs
 
 
 def build_codebook(
@@ -221,7 +248,7 @@ def build_codebook(
     random_state: int = 42,
     sample_limit_per_image: int = 300,
     patch_size: int = 32,
-) -> tuple[np.ndarray, KMeans, int, np.ndarray]:
+) -> tuple[np.ndarray, MiniBatchKMeans, int, np.ndarray]:
     """Extract descriptors from training images and cluster into K visual words using K-Means.
     Also extracts representative image patches for each visual word centroid.
 
@@ -244,13 +271,21 @@ def build_codebook(
     -------
     codebook : np.ndarray
         (K, D) float32 matrix of cluster centroids (visual words).
-    kmeans : KMeans
-        Fitted scikit-learn KMeans estimator.
+    kmeans : MiniBatchKMeans
+        Fitted scikit-learn MiniBatchKMeans estimator.
     total_descriptors : int
         Total number of training descriptors pooled.
     visual_word_patches : np.ndarray
         (K, patch_size, patch_size) uint8 representative patches for each visual word.
     """
+    method = method.upper()
+    if method not in {"SIFT", "ORB"}:
+        raise ValueError("Descriptor method must be 'SIFT' or 'ORB'.")
+    if k < 2:
+        raise ValueError("The codebook must contain at least 2 visual words.")
+    if sample_limit_per_image < 1 or patch_size < 1:
+        raise ValueError("Descriptor sample limit and patch size must be positive.")
+
     rng = random.Random(random_state)
     all_descriptors: list[np.ndarray] = []
     all_patches: list[np.ndarray] = []
@@ -311,11 +346,13 @@ def build_codebook(
             "Please provide images with more texture or reduce K."
         )
 
-    kmeans = KMeans(
+    kmeans = MiniBatchKMeans(
         n_clusters=k,
         random_state=random_state,
         n_init=5,
         max_iter=200,
+        batch_size=max(256, min(4096, total_count)),
+        reassignment_ratio=0.01,
     )
     kmeans.fit(pooled)
 
@@ -377,6 +414,71 @@ def compute_bovw_histogram(
     return counts
 
 
+def map_features_to_codebook(
+    image: Image.Image | np.ndarray,
+    codebook: np.ndarray,
+    method: str = "SIFT",
+    max_keypoints: int = 200,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[cv2.KeyPoint]]:
+    """Explicitly map each extracted local feature to its closest centroid in the codebook.
+
+    Implements the Set 7.2 mapping logic:
+      1. Extract SIFT keypoints and descriptors from image.
+      2. For each feature, compute Euclidean distance to all K codebook centroids.
+      3. Map/assign each feature to its closest centroid index.
+      4. Accumulate assignments into a normalized K-dimensional frequency histogram.
+
+    Parameters
+    ----------
+    image : Image.Image | np.ndarray
+        Input image.
+    codebook : np.ndarray
+        (K, D) cluster centroids (visual words), default K=30.
+    method : str
+        Descriptor method ('SIFT').
+    max_keypoints : int
+        Maximum number of keypoints to extract and map.
+
+    Returns
+    -------
+    kps_coords : np.ndarray
+        (N, 2) array of (x, y) keypoint coordinates in image pixel space.
+    assigned_centroids : np.ndarray
+        (N,) array of integer centroid indices in [0, K-1] that each keypoint was mapped to.
+    histogram : np.ndarray
+        (K,) float32 normalized visual word frequency histogram.
+    kps : list[cv2.KeyPoint]
+        List of detected cv2.KeyPoint objects.
+    """
+    kps, descriptors = extract_keypoints_and_descriptors(
+        image, method=method, max_keypoints=max_keypoints, contrast_threshold=0.03, edge_threshold=10.0
+    )
+    k = len(codebook)
+    if len(kps) == 0 or len(descriptors) == 0:
+        raise ValueError(f"No {method.upper()} features were detected in this image.")
+
+    # Sort keypoints by response descending (cleanest, most distinctive first)
+    responses = np.array([kp.response for kp in kps])
+    sort_idx = np.argsort(responses)[::-1]
+    kps = [kps[i] for i in sort_idx]
+    descriptors = descriptors[sort_idx]
+
+    # Explicit mapping: Euclidean distance between each feature and all centroids
+    # dist(d_i, C_j) = ||d_i - C_j||_2
+    distances = cdist(descriptors, codebook, metric="euclidean")
+    assigned_centroids = np.argmin(distances, axis=1)  # (N,) closest centroid index
+
+    # Build k-dimensional frequency histogram
+    counts = np.bincount(assigned_centroids, minlength=k).astype(np.float32)
+    total = np.sum(counts)
+    histogram = counts / total if total > 0 else counts
+
+    # Coordinates (x, y) in image space
+    kps_coords = np.array([kp.pt for kp in kps], dtype=np.float32)
+
+    return kps_coords, assigned_centroids, histogram, kps
+
+
 def compute_dataset_histograms(
     image_paths: list[Path],
     codebook: np.ndarray,
@@ -394,16 +496,29 @@ def compute_dataset_histograms(
     histograms: list[np.ndarray] = []
     valid_paths: list[Path] = []
 
+    failures: list[str] = []
     for path in image_paths:
         try:
             with Image.open(path) as opened:
                 img = opened.copy()
             desc = extract_descriptors(img, method=method)
+            if len(desc) == 0:
+                raise ValueError(f"No {method.upper()} features were found.")
             hist = compute_bovw_histogram(desc, codebook, normalize=True)
             histograms.append(hist)
             valid_paths.append(path)
-        except Exception:
-            continue
+        except Exception as err:
+            failures.append(f"{path.name}: {err}")
+
+    if failures:
+        preview = "; ".join(failures[:3])
+        remaining = len(failures) - 3
+        if remaining > 0:
+            preview += f"; and {remaining} more"
+        raise ValueError(
+            "Could not generate histograms for every dataset image. "
+            f"Check these files: {preview}"
+        )
 
     if not histograms:
         raise ValueError("Failed to extract histograms from any of the specified images.")
@@ -421,6 +536,17 @@ def train_bovw_classifier(
 
     Uses an RBF-kernel SVC with Platt scaling (probability=True) for calibrated posterior probabilities.
     """
+    if len(X_train) != len(y_train):
+        raise ValueError("Training histograms and labels must have the same number of entries.")
+    observed_classes = set(y_train)
+    missing_classes = sorted(set(class_names) - observed_classes)
+    if missing_classes:
+        raise ValueError(
+            "Training data is missing categories: " + ", ".join(missing_classes)
+        )
+    if len(observed_classes) < 2:
+        raise ValueError("At least two categories are needed to train a classifier.")
+
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_train)
 
@@ -454,6 +580,11 @@ def evaluate_bovw_classifier(
     conf_matrix : np.ndarray
         (C, C) confusion matrix aligned with class_names.
     """
+    if len(X_test) != len(y_test):
+        raise ValueError("Test histograms and labels must have the same number of entries.")
+    if not len(y_test):
+        raise ValueError("The held-out test set contains no images to evaluate.")
+
     X_scaled = scaler.transform(X_test)
     y_pred = classifier.predict(X_scaled)
 
@@ -480,6 +611,11 @@ def classify_single_image(
 ) -> tuple[str, dict[str, float], np.ndarray]:
     """Classify a single input image and return predicted class, calibrated probabilities, and BoVW histogram."""
     desc = extract_descriptors(image, method=method)
+    if len(desc) == 0:
+        raise ValueError(
+            f"No {method.upper()} features were found in this image. "
+            "Choose a larger or more textured image and try again."
+        )
     hist = compute_bovw_histogram(desc, codebook, normalize=True)
 
     hist_scaled = scaler.transform(hist.reshape(1, -1))
@@ -592,11 +728,21 @@ def render_codebook_visualization(
             ax_cat.scatter(
                 kps_pts[:, 0],
                 kps_pts[:, 1],
-                color="red",
-                s=18,
-                edgecolors="none",
-                alpha=0.9,
+                c="#ff2222",
+                s=24,
+                edgecolors="white",
+                linewidths=0.75,
+                alpha=0.92,
                 zorder=3,
+            )
+            ax_cat.scatter(
+                kps_pts[:, 0],
+                kps_pts[:, 1],
+                c="white",
+                s=3,
+                edgecolors="none",
+                alpha=0.95,
+                zorder=4,
             )
 
         n_pts_str = f" ({len(kps_pts)} keypoints)" if kps_pts is not None and len(kps_pts) > 0 else ""
@@ -641,6 +787,133 @@ def render_codebook_visualization(
         fontweight="bold",
         y=0.985,
     )
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf)
+
+
+def render_test_image_histogram_mapping(
+    image: Image.Image | np.ndarray,
+    kps_coords: np.ndarray,
+    assigned_centroids: np.ndarray,
+    histogram: np.ndarray,
+    class_name: str = "Unknown",
+    image_title: str = "Test Image",
+    max_mapping_lines: int = 120,
+) -> Image.Image:
+    """Render Set 7.2 layout matching the reference format:
+    Display the test image with its extracted feature keypoints on the left,
+    and draw mapping lines connecting each feature point to its closest centroid/bin
+    in the frequency histogram on the right.
+
+    Parameters
+    ----------
+    image : Image.Image | np.ndarray
+        Held-out test image.
+    kps_coords : np.ndarray
+        (N, 2) array of (x, y) keypoint positions on the image.
+    assigned_centroids : np.ndarray
+        (N,) array of centroid indices in [0, K-1] that each feature was mapped to.
+    histogram : np.ndarray
+        (K,) normalized frequency histogram vector.
+    class_name : str
+        Category name of the test image.
+    image_title : str
+        Name or description of the test image.
+    max_mapping_lines : int
+        Maximum number of connection lines to draw to avoid visual clutter.
+
+    Returns
+    -------
+    Image.Image
+        The rendered PIL Image.
+    """
+    k = len(histogram)
+    fig, (ax_img, ax_hist) = plt.subplots(
+        1, 2, figsize=(12.5, 4.8), dpi=100, gridspec_kw={"width_ratios": [1, 1.25], "wspace": 0.32}
+    )
+    fig.patch.set_facecolor("#ffffff")
+
+    # Panel 1: Test Image with Keypoints ─────────────────────────────────────
+    if isinstance(image, Image.Image):
+        img_arr = np.array(image.convert("RGB"))
+    elif image.ndim == 2:
+        img_arr = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    else:
+        img_arr = image
+
+    ax_img.imshow(img_arr)
+    title_text = class_name.lower() if class_name and class_name.lower() != "unknown" else image_title
+    ax_img.set_title(title_text, fontsize=12, pad=8)
+    ax_img.axis("off")
+
+    n_points = len(kps_coords)
+    cmap = matplotlib.colormaps["tab20"]
+    colors = [cmap(int(w) % 20) for w in assigned_centroids] if n_points > 0 else []
+
+    if n_points > 0:
+        ax_img.scatter(
+            kps_coords[:, 0],
+            kps_coords[:, 1],
+            c=colors,
+            s=24,
+            edgecolors="white",
+            linewidths=0.6,
+            alpha=0.92,
+            zorder=4,
+        )
+
+    # Panel 2: BoVW Frequency Histogram ──────────────────────────────────────
+    x_indices = np.arange(k)
+    ax_hist.bar(
+        x_indices,
+        histogram,
+        width=0.75,
+        facecolor="#ffffff",
+        edgecolor="#1a1a1a",
+        linewidth=0.85,
+        zorder=3,
+    )
+    ax_hist.set_title("Histogram of visual words", fontsize=11, pad=8)
+    ax_hist.set_xlabel("Visual word index", fontsize=10)
+    ax_hist.set_ylabel("Normalized frequency", fontsize=10)
+    ax_hist.set_xlim(-0.8, k + 0.2)
+    ax_hist.set_xticks([0, 5, 10, 15, 20, 25, 30] if k >= 30 else np.arange(0, k + 1, max(1, k // 6)))
+    ax_hist.set_ylim(bottom=0, top=max(0.16, float(np.max(histogram) * 1.15) if len(histogram) > 0 else 0.16))
+    ax_hist.grid(True, axis="y", linestyle=":", alpha=0.35, zorder=1)
+
+    for spine in ax_hist.spines.values():
+        spine.set_color("#333333")
+        spine.set_linewidth(0.8)
+
+    # Mapping lines: each feature point connected to its closest centroid bin ─
+    if n_points > 0:
+        if n_points > max_mapping_lines:
+            step = n_points / max_mapping_lines
+            line_indices = [int(i * step) for i in range(max_mapping_lines)]
+        else:
+            line_indices = list(range(n_points))
+
+        for idx in line_indices:
+            w = int(assigned_centroids[idx])
+            bar_y = float(histogram[w]) if w < k else 0.0
+            kp_x = float(kps_coords[idx, 0])
+            kp_y = float(kps_coords[idx, 1])
+
+            con = ConnectionPatch(
+                xyA=(kp_x, kp_y),
+                coordsA=ax_img.transData,
+                xyB=(w, bar_y),
+                coordsB=ax_hist.transData,
+                color=colors[idx],
+                alpha=0.25,
+                linewidth=0.65,
+                zorder=2,
+            )
+            fig.add_artist(con)
 
     buf = io.BytesIO()
     plt.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
@@ -724,11 +997,12 @@ def render_image_and_histogram(
     # If predicted class and probabilities are present, show summary badge
     if predicted_class is not None and probabilities is not None:
         p_val = probabilities.get(predicted_class, 0.0)
-        badge = f"Prediction: {predicted_class} (p = {p_val:.2f})"
+        badge = f"p({predicted_class}) = {p_val:.2f}"
+        ax_img.set_title(f"{badge}\n{image_title}", fontsize=12, fontweight="bold", pad=8)
         ax_hist.text(
             0.5,
             0.92,
-            badge,
+            f"Prediction: {predicted_class} ({badge})",
             transform=ax_hist.transAxes,
             ha="center",
             va="center",
@@ -739,7 +1013,7 @@ def render_image_and_histogram(
         )
 
         prob_str = " | ".join(f"p({c}) = {p:.2f}" for c, p in sorted(probabilities.items()))
-        plt.suptitle(f"BoVW Classification: {badge}\n{prob_str}", fontsize=12, fontweight="bold", y=0.99)
+        plt.suptitle(f"BoVW Classification: {badge}  |  {prob_str}", fontsize=12, fontweight="bold", y=0.99)
     else:
         plt.suptitle(f"Histogram of visual words: {image_title}", fontsize=12, fontweight="bold", y=0.98)
 

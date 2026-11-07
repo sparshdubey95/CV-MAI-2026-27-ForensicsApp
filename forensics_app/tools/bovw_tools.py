@@ -28,9 +28,11 @@ from .bovw_core import (
     get_active_bovw_model,
     get_active_bovw_split,
     load_bovw_bundle,
+    map_features_to_codebook,
     render_codebook_visualization,
     render_confusion_matrix_figure,
     render_image_and_histogram,
+    render_test_image_histogram_mapping,
     save_bovw_bundle,
     scan_dataset,
     set_active_bovw_model,
@@ -46,6 +48,7 @@ from .dialogs import (
     ask_image_file,
     ask_image_folder,
     ask_save_bovw_model_file,
+    show_bovw_classification_dialog,
     show_error,
 )
 
@@ -76,11 +79,11 @@ class BoVWCodebookTool(ForensicsTool):
                 show_error(parent, "Dataset Error", str(err))
             return None
 
-        # 3. Configure parameters (K = 10 * num_classes, method, split)
+        # 3. Configure parameters (K locked to 30, method locked to SIFT per coursework requirements)
         params = ask_bovw_codebook_parameters(parent, class_names, default_split=0.25)
         if params is None:
             return None
-        k_val, method, test_ratio = params
+        k_val, method, test_ratio = 30, "SIFT", params[2]
 
         # 4. Perform stratified train/test split (only training images are used for codebook)
         try:
@@ -95,7 +98,7 @@ class BoVWCodebookTool(ForensicsTool):
                 show_error(parent, "Split Error", f"Failed to split dataset: {err}")
             return None
 
-        # 5. Build codebook using ONLY training images
+        # 5. Build codebook using ONLY training images (K=30 visual words, SIFT)
         try:
             codebook, kmeans, total_desc, visual_word_patches = build_codebook(
                 train_paths=train_paths,
@@ -109,7 +112,7 @@ class BoVWCodebookTool(ForensicsTool):
                 show_error(parent, "Codebook Training Error", str(err))
             return None
 
-        # Extract 1 representative sample image with detected keypoints per category
+        # Extract 1 representative sample image with clean, properly localized keypoints per category
         category_samples: dict[str, tuple[Image.Image, np.ndarray]] = {}
         for c_name in class_names:
             for p, lbl in zip(train_paths, train_labels):
@@ -118,16 +121,35 @@ class BoVWCodebookTool(ForensicsTool):
                         with Image.open(p) as opened:
                             sample_img = opened.convert("RGB")
                         gray_sample = np.array(sample_img.convert("L"), dtype=np.uint8)
-                        if method.upper() == "SIFT":
-                            det = cv2.SIFT_create(nfeatures=400)
-                        else:
-                            det = cv2.ORB_create(nfeatures=400)
+                        det = cv2.SIFT_create(
+                            nfeatures=250,
+                            contrastThreshold=0.04,
+                            edgeThreshold=10.0,
+                        )
                         kps, _ = det.detectAndCompute(gray_sample, None)
-                        coords = np.array([kp.pt for kp in kps]) if kps else np.empty((0, 2))
+                        if kps:
+                            kps = sorted(kps, key=lambda kp: kp.response, reverse=True)[:100]
+                            coords = np.array([kp.pt for kp in kps], dtype=np.float32)
+                        else:
+                            coords = np.empty((0, 2), dtype=np.float32)
                         category_samples[c_name] = (sample_img, coords)
                     except Exception:
                         pass
                     break
+
+        # Train classifier and evaluate on test set so model bundle is fully usable in 7.2 & 7.3
+        try:
+            X_train, _ = compute_dataset_histograms(train_paths, codebook, method="SIFT")
+            classifier, scaler = train_bovw_classifier(X_train, train_labels, class_names)
+            X_test, _ = compute_dataset_histograms(test_paths, codebook, method="SIFT")
+            accuracy, report, conf_matrix = evaluate_bovw_classifier(
+                classifier, scaler, X_test, test_labels, class_names
+            )
+            eval_info = {"accuracy": accuracy, "report": report, "conf_matrix": conf_matrix}
+        except Exception:
+            classifier = None
+            scaler = None
+            eval_info = None
 
         # 6. Ask save location for the model bundle
         save_path = ask_save_bovw_model_file(
@@ -150,10 +172,11 @@ class BoVWCodebookTool(ForensicsTool):
                     save_path,
                     codebook=codebook,
                     class_names=class_names,
-                    classifier=None,
-                    scaler=None,
+                    classifier=classifier,
+                    scaler=scaler,
                     method=method,
                     split_info=split_info,
+                    evaluation=eval_info,
                     visual_word_patches=visual_word_patches,
                 )
             except Exception as err:
@@ -166,9 +189,10 @@ class BoVWCodebookTool(ForensicsTool):
             "class_names": class_names,
             "method": method,
             "k": k_val,
-            "classifier": None,
-            "scaler": None,
+            "classifier": classifier,
+            "scaler": scaler,
             "split_info": split_info,
+            "evaluation": eval_info,
             "visual_word_patches": visual_word_patches,
             "filepath": str(save_path) if save_path else "In-memory session",
         }
@@ -210,153 +234,170 @@ class BoVWCodebookTool(ForensicsTool):
 
 
 class BoVWHistogramTool(ForensicsTool):
-    """Set 7.2: Generate and visualize BoVW frequency histograms for held-out testing or query images."""
+    """Set 7.2: Generate and visualize BoVW frequency histograms for held-out testing images only."""
 
     tool_id = "bovw_histogram"
     title = "BoVW histogram visualizer"
     category = "Set 7: Bag of Visual Words & Classification"
-    description = "Generate and inspect BoVW visual word histograms for test or query images."
+    description = "Inspect BoVW visual word histogram with feature-to-centroid mapping lines for test images only."
     requires_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
-        # 1. Acquire Model / Codebook
+        # 1. Require user to select/load a saved codebook model (from Section 7.1)
         model = get_active_bovw_model()
-        if model is None:
-            if parent is not None:
-                load_file = ask_bovw_model_file(parent, title="Select Saved BoVW Model File")
+        if parent is not None:
+            if model is not None and model.get("split_info") and model["split_info"].get("test_paths"):
+                source_choice = ask_choice(
+                    parent,
+                    "Select BoVW Codebook Model",
+                    "Choose codebook model source for test image histogram visualization:",
+                    [
+                        ("active", f"Use active codebook model ({Path(model.get('filepath', 'Active Session')).name})"),
+                        ("load", "Select/load a saved codebook model file (.bovw) from Section 7.1..."),
+                    ],
+                    initial="active",
+                )
+                if source_choice is None:
+                    return None
+                if source_choice == "load":
+                    load_file = ask_bovw_model_file(
+                        parent,
+                        title="Select Saved BoVW Codebook Model (.bovw) from Section 7.1",
+                    )
+                    if not load_file:
+                        return None
+                    try:
+                        model = load_bovw_bundle(load_file)
+                        set_active_bovw_model(model)
+                        set_active_bovw_split(model.get("split_info"))
+                    except Exception as err:
+                        show_error(parent, "Load Error", str(err))
+                        return None
+            else:
+                load_file = ask_bovw_model_file(
+                    parent,
+                    title="Select Saved BoVW Codebook Model (.bovw) from Section 7.1",
+                )
                 if not load_file:
-                    show_error(parent, "Model Required", "Please build or select a BoVW codebook model first.")
+                    show_error(
+                        parent,
+                        "Saved Codebook Required",
+                        "Please select or load a saved BoVW codebook model (from Section 7.1) "
+                        "before running the histogram visualizer.",
+                    )
                     return None
                 try:
                     model = load_bovw_bundle(load_file)
                     set_active_bovw_model(model)
-                    if model.get("split_info"):
-                        set_active_bovw_split(model["split_info"])
+                    set_active_bovw_split(model.get("split_info"))
                 except Exception as err:
                     show_error(parent, "Load Error", str(err))
                     return None
-            else:
-                return None
+
+        if model is None:
+            return None
 
         codebook = model["codebook"]
         method = model.get("method", "SIFT")
-        split_info = get_active_bovw_split() or model.get("split_info")
+        split_info = model.get("split_info") or get_active_bovw_split()
 
-        target_image: Image.Image | None = None
-        true_class = "Unknown"
-        image_name = "Query Image"
-
-        # 2. Offer selection source: Held-out Test Set vs Browse / Open Image
-        if split_info and split_info.get("test_paths") and parent is not None:
-            choice = ask_choice(
-                parent,
-                "Select Histogram Target Image",
-                "Choose which image to generate a visual word histogram for:",
-                [
-                    ("test_set", "Select from held-out testing set (Set 7.2 requirement)"),
-                    ("current", "Use currently opened image in application"),
-                    ("browse", "Browse for an image file from disk..."),
-                ],
-                initial="test_set",
-            )
-            if choice is None:
-                return None
-
-            if choice == "test_set":
-                test_paths = [Path(p) for p in split_info["test_paths"]]
-                test_labels = split_info.get("test_labels", ["Unknown"] * len(test_paths))
-                test_items = [(test_labels[i], test_paths[i].name) for i in range(len(test_paths))]
-
-                chosen_idx = ask_bovw_select_test_image(parent, test_items)
-                if chosen_idx is None:
-                    return None
-
-                img_path = test_paths[chosen_idx]
-                true_class = test_labels[chosen_idx]
-                image_name = img_path.name
-                try:
-                    with Image.open(img_path) as opened:
-                        target_image = opened.copy()
-                except Exception as err:
-                    show_error(parent, "Open Error", f"Could not open image: {err}")
-                    return None
-
-            elif choice == "current":
-                if document.is_loaded and document.current is not None:
-                    target_image = document.current
-                    if document.path:
-                        image_name = document.path.name
-                else:
-                    show_error(parent, "No Image Loaded", "No image is currently loaded. Opening file picker...")
-                    path = ask_image_file(parent, title="Select image for BoVW histogram")
-                    if not path:
-                        return None
-                    with Image.open(path) as opened:
-                        target_image = opened.copy()
-                    image_name = Path(path).name
-            else:
-                path = ask_image_file(parent, title="Select image for BoVW histogram")
-                if not path:
-                    return None
-                with Image.open(path) as opened:
-                    target_image = opened.copy()
-                image_name = Path(path).name
-        else:
-            # Fallback when no active split is present or headless
-            if document.is_loaded and document.current is not None:
-                target_image = document.current
-                if document.path:
-                    image_name = document.path.name
-            else:
-                path = ask_image_file(parent, title="Select image for BoVW histogram")
-                if not path:
-                    return None
-                try:
-                    with Image.open(path) as opened:
-                        target_image = opened.copy()
-                    image_name = Path(path).name
-                except Exception as err:
-                    if parent is not None:
-                        show_error(parent, "Open Error", str(err))
-                    return None
-
-        assert target_image is not None
-
-        # 3. Extract descriptors and compute BoVW histogram
-        try:
-            desc = extract_descriptors(target_image, method=method)
-            histogram = compute_bovw_histogram(desc, codebook, normalize=True)
-        except Exception as err:
+        # 2. Restrict this section strictly to test images only
+        if not split_info or not split_info.get("test_paths"):
             if parent is not None:
-                show_error(parent, "Histogram Error", str(err))
+                show_error(
+                    parent,
+                    "Test Images Required",
+                    "The selected codebook model does not contain held-out test images.\n"
+                    "Section 7.2 is strictly restricted to test images only.",
+                )
             return None
 
-        # 4. Render 2-panel figure showing the image + its BoVW histogram
-        rendered_fig = render_image_and_histogram(
+        test_paths = [Path(p) for p in split_info["test_paths"]]
+        test_labels = split_info.get("test_labels", ["Unknown"] * len(test_paths))
+
+        # Check existing test images on disk
+        valid_indices: list[int] = []
+        resolved_paths: list[Path] = []
+        for i, p in enumerate(test_paths):
+            if p.is_file():
+                valid_indices.append(i)
+                resolved_paths.append(p)
+            elif split_info.get("dataset_root"):
+                alt_p = Path(split_info["dataset_root"]) / p.parent.name / p.name
+                if alt_p.is_file():
+                    valid_indices.append(i)
+                    resolved_paths.append(alt_p)
+
+        if not resolved_paths:
+            if parent is not None:
+                show_error(
+                    parent,
+                    "Test Images Not Found",
+                    "Could not locate the held-out test images on disk. Please verify the dataset location.",
+                )
+            return None
+
+        test_items = [(test_labels[orig_i], resolved_paths[idx].name) for idx, orig_i in enumerate(valid_indices)]
+
+        if parent is not None:
+            chosen_idx = ask_bovw_select_test_image(parent, test_items)
+            if chosen_idx is None:
+                return None
+        else:
+            chosen_idx = 0
+
+        target_path = resolved_paths[chosen_idx]
+        true_class = test_items[chosen_idx][0]
+        image_name = target_path.name
+        try:
+            with Image.open(target_path) as opened:
+                target_image = opened.copy()
+        except Exception as err:
+            if parent is not None:
+                show_error(parent, "Open Error", f"Could not open test image: {err}")
+            return None
+
+        # 3. Explicit mapping logic: map each feature to its closest centroid
+        try:
+            kps_coords, assigned_centroids, histogram, kps = map_features_to_codebook(
+                image=target_image,
+                codebook=codebook,
+                method=method,
+                max_keypoints=150,
+            )
+        except Exception as err:
+            if parent is not None:
+                show_error(parent, "Feature Mapping Error", str(err))
+            return None
+
+        # 4. Render layout: Test image with keypoints on left, mapping lines connecting to histogram bins on right
+        rendered_fig = render_test_image_histogram_mapping(
             image=target_image,
+            kps_coords=kps_coords,
+            assigned_centroids=assigned_centroids,
             histogram=histogram,
             class_name=true_class,
             image_title=image_name,
-            visual_word_patches=model.get("visual_word_patches"),
+            max_mapping_lines=120,
         )
 
         top_word_indices = np.argsort(histogram)[::-1][:3]
-        top_words_str = ", ".join(f"Word #{idx+1} ({histogram[idx]*100:.1f}%)" for idx in top_word_indices)
+        top_words_str = ", ".join(f"Word #{idx} ({histogram[idx]*100:.1f}%)" for idx in top_word_indices)
 
         details = {
-            "Operation": "BoVW Histogram Generation (Set 7.2)",
-            "Target image": image_name,
+            "Operation": "BoVW Test Image Histogram Construction (Set 7.2)",
+            "Target test image": image_name,
             "Class label": true_class,
-            "Descriptors extracted": len(desc),
+            "Keypoints mapped": len(kps_coords),
             "Visual words (K)": len(codebook),
             "Active visual words": int(np.count_nonzero(histogram)),
             "Dominant visual words": top_words_str,
-            "Codebook source": Path(model.get("filepath", "In-memory")).name,
+            "Codebook source": Path(model.get("filepath", "Active session")).name,
         }
 
         message = (
-            f"Histogram generated for {image_name} ({len(desc)} descriptors, "
-            f"{details['Active visual words']}/{len(codebook)} active words)."
+            f"Explicit mapping completed for {image_name}: {len(kps_coords)} features mapped to closest centroids "
+            f"({details['Active visual words']}/{len(codebook)} active bins in histogram)."
         )
 
         return ToolResult(
@@ -367,12 +408,12 @@ class BoVWHistogramTool(ForensicsTool):
 
 
 class BoVWClassifierTool(ForensicsTool):
-    """Set 7.3: Train/evaluate classifier on test set, or classify a single query image with calibrated probabilities."""
+    """Set 7.3: Image classification designed specifically for new/external images."""
 
     tool_id = "bovw_classifier"
     title = "BoVW image classifier"
     category = "Set 7: Bag of Visual Words & Classification"
-    description = "Train/evaluate classifier on BoVW histograms, or classify a single image with calibrated probabilities."
+    description = "Classify new/external images: inspect computed histogram first, then run classifier for top probability."
     requires_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
@@ -387,238 +428,132 @@ class BoVWClassifierTool(ForensicsTool):
                 try:
                     model = load_bovw_bundle(load_file)
                     set_active_bovw_model(model)
-                    if model.get("split_info"):
-                        set_active_bovw_split(model["split_info"])
+                    set_active_bovw_split(model.get("split_info"))
                 except Exception as err:
                     show_error(parent, "Load Error", str(err))
                     return None
             else:
                 return None
 
-        has_trained_clf = model.get("classifier") is not None
-        split_info = get_active_bovw_split() or model.get("split_info")
-
-        # 2. Ask user action: Train & Evaluate vs Classify Single Image
-        if parent is not None:
-            options: list[tuple[str, str]] = []
+        # Ensure classifier is trained
+        if model.get("classifier") is None or model.get("scaler") is None:
+            split_info = model.get("split_info") or get_active_bovw_split()
             if split_info and split_info.get("train_paths"):
-                options.append(("train_eval", "Train & Evaluate Classifier on Held-Out Test Set (Set 7.3.1 - 7.3.3)"))
-            options.append(("classify", "Classify New Image with Calibrated Probability (Set 7.3.4 - 7.3.10)"))
-
-            action = ask_choice(
-                parent,
-                "BoVW Classification Action",
-                "Select classification task:",
-                options,
-                initial="train_eval" if not has_trained_clf and split_info else "classify",
-            )
-            if action is None:
-                return None
-        else:
-            action = "train_eval" if not has_trained_clf and split_info else "classify"
-
-        # ── ACTION A: Train & Evaluate Classifier ─────────────────────────────
-        if action == "train_eval":
-            if not split_info or not split_info.get("train_paths"):
-                if parent is not None:
-                    show_error(parent, "Dataset Split Missing", "No dataset split available to train classifier.")
-                return None
-
-            train_paths = [Path(p) for p in split_info["train_paths"]]
-            train_labels = split_info["train_labels"]
-            test_paths = [Path(p) for p in split_info["test_paths"]]
-            test_labels = split_info["test_labels"]
-            class_names = model["class_names"]
-            codebook = model["codebook"]
-            method = model.get("method", "SIFT")
-
-            try:
-                # 1. Compute training set histograms
-                X_train, _ = compute_dataset_histograms(train_paths, codebook, method=method)
-                # 2. Train RBF SVM with probability calibration
-                classifier, scaler = train_bovw_classifier(X_train, train_labels, class_names)
-                # 3. Compute test set histograms
-                X_test, _ = compute_dataset_histograms(test_paths, codebook, method=method)
-                # 4. Evaluate on held-out test images
-                accuracy, report, conf_matrix = evaluate_bovw_classifier(
-                    classifier, scaler, X_test, test_labels, class_names
-                )
-            except Exception as err:
-                if parent is not None:
-                    show_error(parent, "Training/Evaluation Error", str(err))
-                return None
-
-            # Update model and save
-            model["classifier"] = classifier
-            model["scaler"] = scaler
-            model["evaluation"] = {
-                "accuracy": accuracy,
-                "report": report,
-                "conf_matrix": conf_matrix,
-            }
-            set_active_bovw_model(model)
-
-            save_path = ask_save_bovw_model_file(
-                parent,
-                title="Save Fully Trained BoVW Classifier Model (.bovw)",
-                initialfile="bovw_trained_classifier.bovw",
-            )
-            if save_path:
                 try:
-                    save_bovw_bundle(
-                        save_path,
-                        codebook=codebook,
-                        class_names=class_names,
-                        classifier=classifier,
-                        scaler=scaler,
-                        method=method,
-                        split_info=split_info,
-                        evaluation=model["evaluation"],
-                        visual_word_patches=model.get("visual_word_patches"),
-                    )
+                    train_paths = [Path(p) for p in split_info["train_paths"]]
+                    X_tr, _ = compute_dataset_histograms(train_paths, model["codebook"], method=model.get("method", "SIFT"))
+                    clf, sc = train_bovw_classifier(X_tr, split_info["train_labels"], model["class_names"])
+                    model["classifier"] = clf
+                    model["scaler"] = sc
+                    set_active_bovw_model(model)
                 except Exception as err:
                     if parent is not None:
-                        show_error(parent, "Save Error", str(err))
-
-            # Render Confusion Matrix Figure
-            cm_fig = render_confusion_matrix_figure(conf_matrix, class_names, accuracy=accuracy)
-
-            details = {
-                "Operation": "Classifier Training & Test Evaluation",
-                "Classifier": "RBF Support Vector Machine (SVC, Calibrated)",
-                "Classes": ", ".join(class_names),
-                "Training samples": len(train_paths),
-                "Test samples evaluated": len(test_paths),
-                "Test Accuracy": f"{accuracy * 100.0:.2f}%",
-            }
-            for c_name in class_names:
-                if c_name in report:
-                    details[f"{c_name} (Prec/Recall)"] = (
-                        f"{report[c_name]['precision']:.2f} / {report[c_name]['recall']:.2f}"
-                    )
-
-            message = (
-                f"Classifier trained & evaluated successfully! Test Accuracy: {accuracy * 100.0:.1f}% "
-                f"across {len(test_paths)} held-out testing images."
-            )
-
-            return ToolResult(
-                image=cm_fig,
-                message=message,
-                details=details,
-            )
-
-        # ── ACTION B: Classify Single Image ───────────────────────────────────
-        else:
-            if model.get("classifier") is None or model.get("scaler") is None:
-                if parent is not None:
-                    show_error(
-                        parent,
-                        "Classifier Required",
-                        "The classifier has not been trained yet. Please select 'Train & Evaluate Classifier' first.",
-                    )
-                return None
-
-            classifier = model["classifier"]
-            scaler = model["scaler"]
-            codebook = model["codebook"]
-            class_names = model["class_names"]
-            method = model.get("method", "SIFT")
-
-            target_image: Image.Image | None = None
-            source_name = "Query Image"
-
-            if document.is_loaded and document.current is not None and parent is not None:
-                img_choice = ask_choice(
-                    parent,
-                    "Select Image to Classify",
-                    "Choose image to classify:",
-                    [
-                        ("current", "Use currently opened image in application"),
-                        ("browse", "Browse for a new image file..."),
-                    ],
-                    initial="current",
-                )
-                if img_choice is None:
+                        show_error(parent, "Classifier Training Error", str(err))
                     return None
-                if img_choice == "current":
-                    target_image = document.current
-                    if document.path:
-                        source_name = document.path.name
-                else:
-                    path = ask_image_file(parent, title="Select image to classify")
-                    if not path:
-                        return None
-                    with Image.open(path) as opened:
-                        target_image = opened.copy()
-                    source_name = Path(path).name
             else:
-                if document.is_loaded and document.current is not None:
-                    target_image = document.current
-                    if document.path:
-                        source_name = document.path.name
-                else:
-                    path = ask_image_file(parent, title="Select image to classify")
-                    if not path:
-                        return None
-                    try:
-                        with Image.open(path) as opened:
-                            target_image = opened.copy()
-                        source_name = Path(path).name
-                    except Exception as err:
-                        if parent is not None:
-                            show_error(parent, "Open Error", str(err))
-                        return None
-
-            assert target_image is not None
-
-            # Perform single image classification
-            try:
-                pred_class, probabilities, hist = classify_single_image(
-                    image=target_image,
-                    codebook=codebook,
-                    classifier=classifier,
-                    scaler=scaler,
-                    class_names=class_names,
-                    method=method,
-                )
-            except Exception as err:
                 if parent is not None:
-                    show_error(parent, "Classification Error", str(err))
+                    show_error(parent, "Classifier Required", "This model does not contain a trained classifier.")
                 return None
 
-            # Render 2-panel figure: image + histogram + calibrated probabilities
-            rendered_fig = render_image_and_histogram(
+        # 2. Select new / external image
+        if parent is not None:
+            path = ask_image_file(parent, title="Select New / External Image to Classify (Set 7.3)")
+            if not path:
+                return None
+            try:
+                with Image.open(path) as opened:
+                    target_image = opened.copy()
+                image_name = Path(path).name
+            except Exception as err:
+                show_error(parent, "Open Error", f"Could not open image: {err}")
+                return None
+        else:
+            if document.is_loaded and document.current is not None:
+                target_image = document.current
+                image_name = document.path.name if document.path else "query_image.jpg"
+            else:
+                return None
+
+        codebook = model["codebook"]
+        classifier = model["classifier"]
+        scaler = model["scaler"]
+        class_names = model["class_names"]
+        method = model.get("method", "SIFT")
+
+        # 3. Workflow: Compute SIFT descriptors and compute BoVW histogram first
+        try:
+            desc = extract_descriptors(target_image, method=method)
+            if len(desc) == 0:
+                raise ValueError(
+                    f"No {method.upper()} features were found in this image. "
+                    "Choose a larger or more textured image and try again."
+                )
+            hist = compute_bovw_histogram(desc, codebook, normalize=True)
+        except Exception as err:
+            if parent is not None:
+                show_error(parent, "Feature Extraction Error", str(err))
+            return None
+
+        initial_fig = render_image_and_histogram(
+            image=target_image,
+            histogram=hist,
+            class_name="Unknown",
+            image_title=image_name,
+            visual_word_patches=model.get("visual_word_patches"),
+        )
+
+        # 4. Display computed histogram first, with 'Classify' button at bottom to execute classifier
+        if parent is not None:
+            dialog_res = show_bovw_classification_dialog(
+                parent=parent,
+                image_name=image_name,
+                initial_fig=initial_fig,
+                target_image=target_image,
+                codebook=codebook,
+                classifier=classifier,
+                scaler=scaler,
+                class_names=class_names,
+                histogram=hist,
+                visual_word_patches=model.get("visual_word_patches"),
+            )
+            if dialog_res is None:
+                return None
+            pred_class, probabilities, final_fig = dialog_res
+        else:
+            pred_class, probabilities, _ = classify_single_image(
+                image=target_image,
+                codebook=codebook,
+                classifier=classifier,
+                scaler=scaler,
+                class_names=class_names,
+                method=method,
+            )
+            final_fig = render_image_and_histogram(
                 image=target_image,
                 histogram=hist,
                 class_name="Unknown",
-                image_title=source_name,
+                image_title=image_name,
                 probabilities=probabilities,
                 predicted_class=pred_class,
                 visual_word_patches=model.get("visual_word_patches"),
             )
 
-            p_pred = probabilities.get(pred_class, 0.0)
-            details = {
-                "Operation": "BoVW Single Image Inference",
-                "Query Image": source_name,
-                "Predicted Category": pred_class,
-                f"Probability p({pred_class})": f"{p_pred:.3f} ({p_pred * 100.0:.1f}%)",
-            }
-            for c_name in class_names:
-                p_c = probabilities.get(c_name, 0.0)
-                details[f"p({c_name})"] = f"{p_c:.3f} ({p_c * 100.0:.1f}%)"
+        top_prob = probabilities.get(pred_class, 0.0)
+        details = {
+            "Operation": "BoVW Classification for New Images (Set 7.3)",
+            "Query Image": image_name,
+            "Predicted Class": pred_class,
+            "Top Probability Score": f"p({pred_class}) = {top_prob:.2f}",
+        }
+        for c_name in class_names:
+            details[f"p({c_name})"] = f"{probabilities.get(c_name, 0.0):.2f}"
+        details["Visual Words (K)"] = len(codebook)
+        details["Classifier"] = "Calibrated RBF Support Vector Machine"
 
-            details["Visual words (K)"] = len(codebook)
-            details["Classifier"] = "Calibrated RBF Support Vector Machine"
+        message = f"Classification result: p({pred_class}) = {top_prob:.2f} ({image_name})"
 
-            message = (
-                f"Classification result: p({pred_class}) = {p_pred:.2f} "
-                f"({', '.join(f'p({c})={p:.2f}' for c, p in sorted(probabilities.items()))})."
-            )
-
-            return ToolResult(
-                image=rendered_fig,
-                message=message,
-                details=details,
-            )
+        return ToolResult(
+            image=final_fig,
+            message=message,
+            details=details,
+        )
