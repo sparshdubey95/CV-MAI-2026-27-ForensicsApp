@@ -535,7 +535,7 @@ def ask_bovw_codebook_parameters(
     )
     ttk.Label(
         frame,
-        text="SIFT (locked to default coursework requirement)",
+        text="SIFT",
         font=("TkDefaultFont", 9, "italic"),
         foreground="#444444",
     ).grid(row=1, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
@@ -546,7 +546,7 @@ def ask_bovw_codebook_parameters(
     )
     ttk.Label(
         frame,
-        text="30 (locked to default coursework requirement)",
+        text="30",
         font=("TkDefaultFont", 9, "italic"),
         foreground="#444444",
     ).grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
