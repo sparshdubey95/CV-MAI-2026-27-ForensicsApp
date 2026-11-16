@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-from skimage import feature
+from skimage import feature, measure, transform
 
 from forensics_app.core import ImageDocument
 from .base import ForensicsTool, ToolResult
@@ -28,7 +28,8 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 # Extracts descriptors from the reference image once (saving precious processing time).
 # Loops through every single candidate image in a for loop.
 # Compares the candidate's descriptors to the reference descriptors using feature.match_descriptors(...) (using Hamming for ORB or Euclidean for SIFT).
-# It uses a max-tracking variable (best_matches). If a candidate has more matches than the current record-holder, it replaces it as the new winner (best_path).
+# Filters out false matches using RANSAC geometric verification (skimage.measure.ransac + AffineTransform).
+# It uses a max-tracking variable (best_inliers_count). If a candidate has more inliers than the current record-holder, it replaces it as the new winner (best_path).
 def lookup_closest_image(
     reference_image: Image.Image | np.ndarray,
     folder: str | Path,
@@ -37,11 +38,13 @@ def lookup_closest_image(
     n_octaves: int = 8,
     n_scales: int = 3,
     sigma_min: float = 1.6,
+    min_samples: int = 4,
+    residual_threshold: float = 2.0,
 ) -> tuple[Path, np.ndarray, np.ndarray, np.ndarray]:
-    """Find the candidate with the greatest descriptor-match count.
+    """Find the candidate with the greatest inlier match count using RANSAC.
 
     Returns the winning path, reference keypoints, winning-image keypoints, and
-    matching descriptor index pairs.
+    filtered inlier descriptor index pairs.
     """
     folder_path = Path(folder)
     candidates = sorted(
@@ -66,7 +69,9 @@ def lookup_closest_image(
 
     best_path: Path | None = None
     best_keypoints: np.ndarray | None = None
-    best_matches: np.ndarray | None = None
+    best_inlier_matches: np.ndarray | None = None
+    best_inlier_count: int = -1
+
     for candidate in candidates:
         try:
             with Image.open(candidate) as opened:
@@ -79,15 +84,40 @@ def lookup_closest_image(
             descriptors,
             metric=metric,
         )
-        if best_matches is None or len(matches) > len(best_matches):
+
+        inlier_matches = np.empty((0, 2), dtype=int)
+        if len(matches) >= min_samples:
+            # Matches coordinates: reference keypoints are src, candidate keypoints are dst.
+            # Convert (row, col) to (x, y) coordinates via [:, ::-1]
+            src_coords = reference_keypoints[matches[:, 0]][:, ::-1]
+            dst_coords = keypoints[matches[:, 1]][:, ::-1]
+
+            try:
+                model, inliers = measure.ransac(
+                    (src_coords, dst_coords),
+                    transform.AffineTransform,
+                    min_samples=min_samples,
+                    residual_threshold=residual_threshold,
+                    max_trials=500,
+                )
+                if inliers is not None and np.any(inliers):
+                    inlier_matches = matches[inliers]
+            except Exception:
+                inlier_matches = np.empty((0, 2), dtype=int)
+
+        inlier_count = len(inlier_matches)
+        if inlier_count > best_inlier_count:
             best_path = candidate
             best_keypoints = keypoints
-            best_matches = matches
+            best_inlier_matches = inlier_matches
+            best_inlier_count = inlier_count
 
-    assert best_path is not None
-    assert best_keypoints is not None
-    assert best_matches is not None
-    return best_path, reference_keypoints, best_keypoints, best_matches
+    if best_path is None:
+        best_path = candidates[0]
+        best_keypoints = np.empty((0, 2), dtype=float)
+        best_inlier_matches = np.empty((0, 2), dtype=int)
+
+    return best_path, reference_keypoints, best_keypoints, best_inlier_matches
 
 
 class ImageLookupTool(ForensicsTool):
