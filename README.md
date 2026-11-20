@@ -29,6 +29,21 @@ Ubuntu/Debian users may first need `sudo apt install python3-tk`.
 
 The complete student handout is [docs/STUDENT_GUIDE.md](docs/STUDENT_GUIDE.md).
 
+## Set 8: CNN classification and feature space
+
+The desktop tools load CIFAR-10 model passports and precomputed feature archives
+from `set8_outputs/`. Train or refresh those artifacts outside the UI with:
+
+```
+python train_set8.py --model custom_cnn --quick --output-dir set8_outputs
+```
+
+The script writes model weights, a JSON passport, and 128-dimensional feature
+vectors with t-SNE and (when `umap-learn` is installed) UMAP coordinates. The
+application loads models from their architecture builder plus weights; it does
+not use full `.keras` archives. Training and projection computation are never
+started automatically when the desktop application opens.
+
 ## Useful commands
 
 ```

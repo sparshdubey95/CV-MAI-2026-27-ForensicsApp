@@ -626,6 +626,7 @@ class FaceRecognitionTool(ForensicsTool):
     category = "Set 6: Face Detection & Recognition"
     description = "Match a test face to the closest training faces using PCA projection and Euclidean distance."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         if parent is not None:

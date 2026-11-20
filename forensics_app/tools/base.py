@@ -29,6 +29,7 @@ class ForensicsTool(ABC):
     category = "Other"
     description = ""
     requires_image = True
+    modifies_image = True
 
     @abstractmethod
     def run(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:

@@ -223,6 +223,7 @@ class FaceDetectionTool(ForensicsTool):
     category = "Set 6: Face Detection & Recognition"
     description = "Detect faces and facial landmarks using OpenCV YuNet (FaceDetectorYN)."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         target_image: Image.Image | None = None

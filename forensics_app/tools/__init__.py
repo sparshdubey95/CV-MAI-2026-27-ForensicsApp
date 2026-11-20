@@ -25,6 +25,7 @@ from .face_detection import FaceDetectionTool
 from .eigenface_builder import EigenfaceBuilderTool
 from .face_recognition import FaceRecognitionTool
 from .bovw_tools import BoVWCodebookTool, BoVWHistogramTool, BoVWClassifierTool
+from .cnn_tools import CNNTrainTool, CNNClassifyTool, CNNFeatureProjectionTool
 
 
 def build_tool_registry() -> ToolRegistry:
@@ -64,6 +65,10 @@ def build_tool_registry() -> ToolRegistry:
             BoVWCodebookTool(),
             BoVWHistogramTool(),
             BoVWClassifierTool(),
+            # Set 8: CNN Classification & Feature Projection
+            CNNTrainTool(),
+            CNNClassifyTool(),
+            CNNFeatureProjectionTool(),
         ]
     )
 

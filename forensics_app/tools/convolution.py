@@ -128,7 +128,7 @@ class ConvolutionTool(ForensicsTool):
     title = "Custom convolution"
     category = "Set 3"
     description = "Convolve image with arbitrary 1D or 2D kernels using scipy.ndimage."
-    requires_image = False
+    requires_image = True
 
     def run(self, parent: tk.Misc, document: ImageDocument) -> ToolResult | None:
         # Use only the image currently open in the application.
