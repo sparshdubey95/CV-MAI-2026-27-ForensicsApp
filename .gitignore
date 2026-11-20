@@ -12,3 +12,10 @@ outputs/
 models/
 datasets/
 LFW_Test_Images/
+blood cell.v1i.yolov11/
+blood_cell.v1i.coco/
+yolo11n.pt
+runs/
+yolo_format_output/
+blood_cell.v1i.yolov11/
+blood cell.v1i.yolov11/

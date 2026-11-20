@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from typing import Any
 
 IMAGE_FILETYPES = [
     ("Image files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp"),
@@ -866,5 +869,503 @@ def show_bovw_classification_dialog(
     window.wait_window()
 
     return result_data["value"]
+
+
+# ============================================================================
+# Set 9 Dialogs: Object Detection with YOLO
+# ============================================================================
+
+
+def ask_pt_file(parent: tk.Misc | None, title: str = "Select YOLO Model Weights (.pt)") -> str | None:
+    """Open file dialog for choosing YOLO model weights (.pt)."""
+    filename = filedialog.askopenfilename(
+        title=title,
+        filetypes=[("PyTorch Weights", "*.pt"), ("All files", "*.*")],
+        parent=parent,
+    )
+    return filename or None
+
+
+def ask_yaml_file(parent: tk.Misc | None, title: str = "Select YOLO Dataset YAML (.yaml)") -> str | None:
+    """Open file dialog for choosing dataset configuration (.yaml)."""
+    filename = filedialog.askopenfilename(
+        title=title,
+        filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+        parent=parent,
+    )
+    return filename or None
+
+
+def ask_yolo_inference_parameters(
+    parent: tk.Misc | None,
+    current_image_loaded: bool = True,
+    default_model: str = "yolo11n.pt",
+    default_conf: float = 0.25,
+) -> dict[str, Any] | None:
+    """Configuration dialog for Set 9.1: Pretrained YOLO Inference."""
+    if parent is None:
+        return {
+            "model_path": default_model,
+            "conf": default_conf,
+            "colormap": "tab20",
+            "box_linewidth": 2,
+            "use_fallback_image": not current_image_loaded,
+            "custom_image_path": None,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 9.1: YOLO Pretrained Model Inference")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Ultralytics YOLO Pretrained Inference (yolo11n.pt)",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    # Model path
+    ttk.Label(frame, text="Model weights:").grid(row=1, column=0, sticky="w", pady=4)
+    model_var = tk.StringVar(value=default_model)
+    model_entry = ttk.Entry(frame, textvariable=model_var, width=32)
+    model_entry.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_model() -> None:
+        f = ask_pt_file(window)
+        if f:
+            model_var.set(f)
+
+    ttk.Button(frame, text="Browse…", command=_browse_model).grid(row=1, column=2, pady=4)
+
+    # Image source
+    ttk.Label(frame, text="Input image:").grid(row=2, column=0, sticky="w", pady=4)
+    image_choice_var = tk.StringVar(value="current" if current_image_loaded else "bus")
+    img_frame = ttk.Frame(frame)
+    img_frame.grid(row=2, column=1, columnspan=2, sticky="w", pady=4)
+
+    if current_image_loaded:
+        ttk.Radiobutton(img_frame, text="Current open image", variable=image_choice_var, value="current").pack(anchor="w")
+    ttk.Radiobutton(img_frame, text="Default sample (bus.jpg)", variable=image_choice_var, value="bus").pack(anchor="w")
+    ttk.Radiobutton(img_frame, text="Browse other image…", variable=image_choice_var, value="browse").pack(anchor="w")
+
+    custom_img_var = tk.StringVar(value="")
+
+    # Colormap selector (tab20 required by coursework)
+    ttk.Label(frame, text="Matplotlib colormap:").grid(row=3, column=0, sticky="w", pady=6)
+    colormap_var = tk.StringVar(value="tab20")
+    cmap_combo = ttk.Combobox(
+        frame,
+        textvariable=colormap_var,
+        values=["tab20", "tab10", "viridis", "plasma", "hsv", "rainbow"],
+        state="readonly",
+        width=18,
+    )
+    cmap_combo.grid(row=3, column=1, sticky="w", padx=6, pady=6)
+
+    # Confidence threshold
+    ttk.Label(frame, text="Confidence threshold:").grid(row=4, column=0, sticky="w", pady=4)
+    conf_var = tk.DoubleVar(value=default_conf)
+    conf_scale = ttk.Scale(frame, from_=0.05, to=0.95, variable=conf_var, orient="horizontal")
+    conf_scale.grid(row=4, column=1, sticky="ew", padx=6, pady=4)
+    conf_lbl = ttk.Label(frame, text=f"{default_conf:.2f}")
+    conf_lbl.grid(row=4, column=2, sticky="w", pady=4)
+
+    def _update_conf_label(*_args: Any) -> None:
+        conf_lbl.configure(text=f"{conf_var.get():.2f}")
+
+    conf_var.trace_add("write", _update_conf_label)
+
+    # Box line width
+    ttk.Label(frame, text="Box border width:").grid(row=5, column=0, sticky="w", pady=4)
+    width_var = tk.IntVar(value=2)
+    ttk.Spinbox(frame, from_=1, to=8, textvariable=width_var, width=5).grid(row=5, column=1, sticky="w", padx=6, pady=4)
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=6, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+    def on_ok() -> None:
+        choice = image_choice_var.get()
+        custom_path = None
+        if choice == "browse":
+            custom_path = ask_image_file(window, title="Select Image for YOLO Inference")
+            if not custom_path:
+                return
+
+        dialog_result["value"] = {
+            "model_path": model_var.get().strip() or "yolo11n.pt",
+            "conf": float(conf_var.get()),
+            "colormap": colormap_var.get(),
+            "box_linewidth": int(width_var.get()),
+            "use_fallback_image": choice == "bus",
+            "custom_image_path": custom_path,
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Run Inference", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+def ask_coco_to_yolo_parameters(
+    parent: tk.Misc | None,
+    default_input: str = "",
+    default_output: str = "",
+) -> dict[str, Any] | None:
+    """Dialog for Section 9.2 COCO-to-YOLO conversion."""
+    if parent is None:
+        return {
+            "input_folder": default_input,
+            "output_folder": default_output,
+            "create_yaml": True,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 9.2: COCO to YOLO Dataset Conversion")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Convert COCO JSON Annotations to YOLO Format",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    ttk.Label(
+        frame,
+        text="Converts [x, y, width, height] COCO bboxes into normalized\n"
+             "[class_id x_center y_center width height] text files in labels/.",
+        font=("TkDefaultFont", 9),
+        foreground="#555555",
+    ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    # Input folder
+    ttk.Label(frame, text="Input COCO folder:").grid(row=2, column=0, sticky="w", pady=4)
+    input_var = tk.StringVar(value=default_input)
+    ttk.Entry(frame, textvariable=input_var, width=38).grid(row=2, column=1, padx=6, pady=4)
+
+    def _browse_input() -> None:
+        f = ask_image_folder(window, title="Select Input COCO Folder (containing _annotations.coco.json)")
+        if f:
+            input_var.set(f)
+
+    ttk.Button(frame, text="Browse…", command=_browse_input).grid(row=2, column=2, pady=4)
+
+    # Output folder
+    ttk.Label(frame, text="Output YOLO folder:").grid(row=3, column=0, sticky="w", pady=4)
+    output_var = tk.StringVar(value=default_output)
+    ttk.Entry(frame, textvariable=output_var, width=38).grid(row=3, column=1, padx=6, pady=4)
+
+    def _browse_output() -> None:
+        f = ask_image_folder(window, title="Select Output Folder (will create images/ and labels/)")
+        if f:
+            output_var.set(f)
+
+    ttk.Button(frame, text="Browse…", command=_browse_output).grid(row=3, column=2, pady=4)
+
+    create_yaml_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(
+        frame,
+        text="Automatically generate data.yaml for blood cell dataset",
+        variable=create_yaml_var,
+    ).grid(row=4, column=0, columnspan=3, sticky="w", pady=8)
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=5, column=0, columnspan=3, sticky="e", pady=(12, 0))
+
+    def on_ok() -> None:
+        inp = input_var.get().strip()
+        out = output_var.get().strip()
+        if not inp or not os.path.isdir(inp):
+            show_error(window, "Invalid Folder", "Please select a valid input COCO directory.")
+            return
+        if not out:
+            show_error(window, "Invalid Folder", "Please specify an output directory.")
+            return
+
+        dialog_result["value"] = {
+            "input_folder": inp,
+            "output_folder": out,
+            "create_yaml": create_yaml_var.get(),
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Convert", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+def ask_yolo_training_parameters(
+    parent: tk.Misc | None,
+    default_yaml: str = "",
+    default_epochs: int = 50,
+    default_batch: int = 16,
+    default_name: str = "from_scratch_50e_v1",
+) -> dict[str, Any] | None:
+    """Dialog for Section 9.2 YOLO model training controls."""
+    if parent is None:
+        return {
+            "data_yaml": default_yaml,
+            "model_cfg": "yolo11n.yaml",
+            "epochs": default_epochs,
+            "batch": default_batch,
+            "name": default_name,
+            "classes": [0, 1, 2],
+            "plots": True,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 9.2: YOLO Model Training Configuration")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="YOLO Training Controls (Section 9.2)",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    # Data YAML
+    ttk.Label(frame, text="Dataset (data.yaml):").grid(row=1, column=0, sticky="w", pady=4)
+    yaml_var = tk.StringVar(value=default_yaml)
+    ttk.Entry(frame, textvariable=yaml_var, width=36).grid(row=1, column=1, padx=6, pady=4)
+
+    def _browse_yaml() -> None:
+        f = ask_yaml_file(window)
+        if f:
+            yaml_var.set(f)
+
+    ttk.Button(frame, text="Browse…", command=_browse_yaml).grid(row=1, column=2, pady=4)
+
+    # Architecture / Weights
+    ttk.Label(frame, text="Model initialization:").grid(row=2, column=0, sticky="w", pady=4)
+    arch_var = tk.StringVar(value="yolo11n.yaml")
+    arch_combo = ttk.Combobox(
+        frame,
+        textvariable=arch_var,
+        values=["yolo11n.yaml", "yolo11n.pt", "yolo11s.yaml", "yolo11s.pt"],
+        state="normal",
+        width=20,
+    )
+    arch_combo.grid(row=2, column=1, sticky="w", padx=6, pady=4)
+
+    # Epochs (default 50 per PDF)
+    ttk.Label(frame, text="Epochs (default 50):").grid(row=3, column=0, sticky="w", pady=4)
+    epochs_var = tk.IntVar(value=default_epochs)
+    ttk.Spinbox(frame, from_=1, to=300, textvariable=epochs_var, width=8).grid(
+        row=3, column=1, sticky="w", padx=6, pady=4
+    )
+
+    # Batch size (default 16 per PDF)
+    ttk.Label(frame, text="Batch size (default 16):").grid(row=4, column=0, sticky="w", pady=4)
+    batch_var = tk.IntVar(value=default_batch)
+    ttk.Spinbox(frame, from_=1, to=128, textvariable=batch_var, width=8).grid(
+        row=4, column=1, sticky="w", padx=6, pady=4
+    )
+
+    # Run name (default from_scratch_50e_v1 per PDF)
+    ttk.Label(frame, text="Run name:").grid(row=5, column=0, sticky="w", pady=4)
+    name_var = tk.StringVar(value=default_name)
+    ttk.Entry(frame, textvariable=name_var, width=24).grid(row=5, column=1, sticky="w", padx=6, pady=4)
+
+    # Classes (default 0, 1, 2 per PDF)
+    ttk.Label(frame, text="Classes ([0, 1, 2]):").grid(row=6, column=0, sticky="w", pady=4)
+    classes_var = tk.StringVar(value="0, 1, 2")
+    ttk.Entry(frame, textvariable=classes_var, width=16).grid(row=6, column=1, sticky="w", padx=6, pady=4)
+
+    plots_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(frame, text="Generate training plots (plots=True)", variable=plots_var).grid(
+        row=7, column=0, columnspan=2, sticky="w", pady=6
+    )
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=8, column=0, columnspan=3, sticky="e", pady=(12, 0))
+
+    def on_ok() -> None:
+        y_path = yaml_var.get().strip()
+        if not y_path or not os.path.isfile(y_path):
+            show_error(window, "Missing data.yaml", "Please select a valid data.yaml file.")
+            return
+
+        try:
+            cl_list = [int(x.strip()) for x in classes_var.get().split(",") if x.strip()]
+        except ValueError:
+            cl_list = [0, 1, 2]
+
+        dialog_result["value"] = {
+            "data_yaml": y_path,
+            "model_cfg": arch_var.get().strip() or "yolo11n.yaml",
+            "epochs": int(epochs_var.get()),
+            "batch": int(batch_var.get()),
+            "name": name_var.get().strip() or "from_scratch_50e_v1",
+            "classes": cl_list,
+            "plots": plots_var.get(),
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Start Training", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+def ask_yolo_comparison_parameters(
+    parent: tk.Misc | None,
+    default_image: str = "",
+    default_label: str = "",
+    default_model: str = "",
+) -> dict[str, Any] | None:
+    """Dialog for Section 9.3: Unseen Image Testing & Comparison."""
+    if parent is None:
+        return {
+            "image_path": default_image,
+            "label_path": default_label,
+            "model_path": default_model,
+            "conf": 0.25,
+            "iou": 0.5,
+            "mode": "side_by_side",
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 9.3: Unseen Image Testing & GT Comparison")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Compare Ground Truth vs YOLO Predictions (Section 9.3)",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    # Test Image
+    ttk.Label(frame, text="Test image:").grid(row=1, column=0, sticky="w", pady=4)
+    img_var = tk.StringVar(value=default_image)
+    ttk.Entry(frame, textvariable=img_var, width=38).grid(row=1, column=1, padx=6, pady=4)
+
+    def _browse_img() -> None:
+        f = ask_image_file(window, title="Select Unseen Test Image (e.g. from test/images)")
+        if f:
+            img_var.set(f)
+            # Auto-infer label path
+            cand = Path(f.replace("images", "labels")).with_suffix(".txt")
+            if cand.is_file():
+                lbl_var.set(str(cand))
+
+    ttk.Button(frame, text="Browse…", command=_browse_img).grid(row=1, column=2, pady=4)
+
+    # Label file
+    ttk.Label(frame, text="Ground truth (.txt):").grid(row=2, column=0, sticky="w", pady=4)
+    lbl_var = tk.StringVar(value=default_label)
+    ttk.Entry(frame, textvariable=lbl_var, width=38).grid(row=2, column=1, padx=6, pady=4)
+
+    def _browse_lbl() -> None:
+        f = filedialog.askopenfilename(
+            title="Select Corresponding Ground Truth Label (.txt)",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            parent=window,
+        )
+        if f:
+            lbl_var.set(f)
+
+    ttk.Button(frame, text="Browse…", command=_browse_lbl).grid(row=2, column=2, pady=4)
+
+    # Model Weights
+    ttk.Label(frame, text="Model weights:").grid(row=3, column=0, sticky="w", pady=4)
+    model_var = tk.StringVar(value=default_model)
+    ttk.Entry(frame, textvariable=model_var, width=38).grid(row=3, column=1, padx=6, pady=4)
+
+    def _browse_model() -> None:
+        f = ask_pt_file(window)
+        if f:
+            model_var.set(f)
+
+    ttk.Button(frame, text="Browse…", command=_browse_model).grid(row=3, column=2, pady=4)
+
+    # Confidence Threshold
+    ttk.Label(frame, text="Confidence threshold:").grid(row=4, column=0, sticky="w", pady=4)
+    conf_var = tk.DoubleVar(value=0.25)
+    conf_scale = ttk.Scale(frame, from_=0.05, to=0.95, variable=conf_var, orient="horizontal")
+    conf_scale.grid(row=4, column=1, sticky="ew", padx=6, pady=4)
+    conf_lbl = ttk.Label(frame, text="0.25")
+    conf_lbl.grid(row=4, column=2, sticky="w", pady=4)
+    conf_var.trace_add("write", lambda *_args: conf_lbl.configure(text=f"{conf_var.get():.2f}"))
+
+    # Display Mode
+    ttk.Label(frame, text="Visualization style:").grid(row=5, column=0, sticky="w", pady=6)
+    mode_var = tk.StringVar(value="side_by_side")
+    mode_frame = ttk.Frame(frame)
+    mode_frame.grid(row=5, column=1, columnspan=2, sticky="w", pady=6)
+    ttk.Radiobutton(mode_frame, text="Side-by-Side (GT left, Pred right)", variable=mode_var, value="side_by_side").pack(anchor="w")
+    ttk.Radiobutton(mode_frame, text="Overlaid Comparison (GT green, Pred blue)", variable=mode_var, value="overlay").pack(anchor="w")
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=6, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+    def on_ok() -> None:
+        ip = img_var.get().strip()
+        if not ip or not os.path.isfile(ip):
+            show_error(window, "Missing Image", "Please select a valid unseen test image.")
+            return
+
+        dialog_result["value"] = {
+            "image_path": ip,
+            "label_path": lbl_var.get().strip() or None,
+            "model_path": model_var.get().strip() or None,
+            "conf": float(conf_var.get()),
+            "iou": 0.5,
+            "mode": mode_var.get(),
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Compare & Evaluate", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
 
 
