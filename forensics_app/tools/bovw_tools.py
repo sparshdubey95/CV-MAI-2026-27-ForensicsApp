@@ -61,6 +61,7 @@ class BoVWCodebookTool(ForensicsTool):
     category = "Set 7: Bag of Visual Words & Classification"
     description = "Build and save visual word codebook using SIFT and K-Means from dataset."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         # 1. Ask for dataset parent folder
@@ -241,6 +242,7 @@ class BoVWHistogramTool(ForensicsTool):
     category = "Set 7: Bag of Visual Words & Classification"
     description = "Inspect BoVW visual word histogram with feature-to-centroid mapping lines for test images only."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         # 1. Require user to select/load a saved codebook model (from Section 7.1)
@@ -415,6 +417,7 @@ class BoVWClassifierTool(ForensicsTool):
     category = "Set 7: Bag of Visual Words & Classification"
     description = "Classify new/external images: inspect computed histogram first, then run classifier for top probability."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         # 1. Acquire Model

@@ -1,0 +1,84 @@
+{
+  "model_type": "inceptionv3_transfer",
+  "model_name": "inceptionv3_cifar10",
+  "created_at": "2026-11-19T16:49:30.013249+00:00",
+  "dataset": {
+    "name": "CIFAR-10",
+    "num_classes": 10,
+    "input_shape": [
+      32,
+      32,
+      3
+    ]
+  },
+  "sample_size": {
+    "train": 50000,
+    "test": 10000,
+    "total": 60000
+  },
+  "class_names": [
+    "airplane",
+    "automobile",
+    "bird",
+    "cat",
+    "deer",
+    "dog",
+    "frog",
+    "horse",
+    "ship",
+    "truck"
+  ],
+  "preprocessing": {
+    "resize_shape": [
+      32,
+      32
+    ],
+    "normalization": "0-1",
+    "color_format": "RGB",
+    "internal_upsample": [
+      75,
+      75
+    ]
+  },
+  "training_history": {
+    "accuracy": [
+      0.5543799996376038,
+      0.6282399892807007,
+      0.6562600135803223,
+      0.6776800155639648,
+      0.6986600160598755
+    ],
+    "loss": [
+      1.2812016010284424,
+      1.0576967000961304,
+      0.9803365468978882,
+      0.9191471338272095,
+      0.8600122928619385
+    ],
+    "val_accuracy": [
+      0.6301000118255615,
+      0.6484000086784363,
+      0.6547999978065491,
+      0.65829998254776,
+      0.6559000015258789
+    ],
+    "val_loss": [
+      1.0575108528137207,
+      1.011348843574524,
+      0.9862263798713684,
+      0.9726186394691467,
+      0.9758301973342896
+    ]
+  },
+  "model_architecture": {
+    "total_params": 22329898,
+    "feature_layer": "feature_vector",
+    "feature_dim": 256
+  },
+  "test_metrics": {
+    "accuracy": 0.6504999995231628,
+    "loss": 0.9793313145637512,
+    "evaluated_samples": 2000,
+    "evaluation_source": "Stratified CIFAR-10 test subset"
+  }
+}

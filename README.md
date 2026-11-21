@@ -29,6 +29,27 @@ Ubuntu/Debian users may first need `sudo apt install python3-tk`.
 
 The complete student handout is [docs/STUDENT_GUIDE.md](docs/STUDENT_GUIDE.md).
 
+## Set 8: CNN classification and feature space
+
+The desktop tools load CIFAR-10 model passports and precomputed feature archives
+from `set8_outputs/`. Train or refresh those artifacts outside the UI with:
+
+```
+python train_set8.py --model custom_cnn --quick --output-dir set8_outputs
+```
+
+The script writes model weights, a JSON passport, and feature vectors with t-SNE
+and (when `umap-learn` is installed) UMAP coordinates. Training and projection
+computation are not started automatically when the desktop application opens.
+Supported model IDs are `custom_cnn`, `vgg_net`, and `inceptionv3_transfer`.
+
+## Set 9: YOLO object detection
+
+The desktop tools provide pretrained YOLO inference, COCO-to-YOLO conversion,
+model training, and ground-truth comparison. Use the `object_detection_with_YOLO.ipynb`
+notebook for the accompanying workflow. YOLO weights and datasets must be
+provided separately; the application can use a selected model or `yolo11n.pt`.
+
 ## Useful commands
 
 ```

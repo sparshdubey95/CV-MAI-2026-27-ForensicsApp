@@ -1,0 +1,86 @@
+{
+  "model_name": "custom_cnn",
+  "architecture_builder": "custom_cnn",
+  "created": "2026-11-20T04:46:15+0100",
+  "framework": "TensorFlow 2.21.0",
+  "weights_file": "custom_cnn.weights.h5",
+  "dataset": {
+    "name": "CIFAR-10",
+    "n_train": 900,
+    "n_val": 100,
+    "n_test": 10000,
+    "num_classes": 10,
+    "input_shape": [
+      32,
+      32,
+      3
+    ]
+  },
+  "sample_size": {
+    "train": 900,
+    "validation": 100,
+    "test": 10000,
+    "total": 11000
+  },
+  "class_names": [
+    "airplane",
+    "automobile",
+    "bird",
+    "cat",
+    "deer",
+    "dog",
+    "frog",
+    "horse",
+    "ship",
+    "truck"
+  ],
+  "input_shape": [
+    32,
+    32,
+    3
+  ],
+  "model_architecture": {
+    "name": "custom_cnn",
+    "total_params": 89066,
+    "feature_layer": "features",
+    "feature_dim": 128
+  },
+  "preprocessing": {
+    "input_color": "RGB",
+    "input_shape": [
+      32,
+      32
+    ],
+    "caller_input": "Pass raw RGB pixels in [0,255]; the model rescales internally to [0,1]."
+  },
+  "training": {
+    "epochs": 2,
+    "batch_size": 128,
+    "learning_rate": 0.001,
+    "optimizer": "Adam",
+    "loss": "sparse_categorical_crossentropy",
+    "duration_seconds": 5.993999899998016
+  },
+  "history": {
+    "loss": [
+      2.345621109008789,
+      2.0354397296905518
+    ],
+    "val_loss": [
+      2.2937867641448975,
+      2.290738821029663
+    ],
+    "accuracy": [
+      0.15333333611488342,
+      0.23000000417232513
+    ],
+    "val_accuracy": [
+      0.11999999731779099,
+      0.14000000059604645
+    ]
+  },
+  "test_metrics": {
+    "accuracy": 0.1225999966263771,
+    "loss": 2.286754608154297
+  }
+}

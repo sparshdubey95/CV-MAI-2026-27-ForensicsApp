@@ -1,0 +1,86 @@
+{
+  "model_name": "vgg_net",
+  "architecture_builder": "vgg_net",
+  "created": "2026-11-20T17:52:27+0100",
+  "framework": "TensorFlow 2.21.0",
+  "weights_file": "vgg_net.weights.h5",
+  "dataset": {
+    "name": "CIFAR-10",
+    "n_train": 900,
+    "n_val": 100,
+    "n_test": 10000,
+    "num_classes": 10,
+    "input_shape": [
+      32,
+      32,
+      3
+    ]
+  },
+  "sample_size": {
+    "train": 900,
+    "validation": 100,
+    "test": 10000,
+    "total": 11000
+  },
+  "class_names": [
+    "airplane",
+    "automobile",
+    "bird",
+    "cat",
+    "deer",
+    "dog",
+    "frog",
+    "horse",
+    "ship",
+    "truck"
+  ],
+  "input_shape": [
+    64,
+    64,
+    3
+  ],
+  "model_architecture": {
+    "name": "vgg_net",
+    "total_params": 3243978,
+    "feature_layer": "features",
+    "feature_dim": 128
+  },
+  "preprocessing": {
+    "input_color": "RGB",
+    "input_shape": [
+      64,
+      64
+    ],
+    "caller_input": "Resize RGB pixels to 64x64 with bilinear interpolation and scale from [0,255] to [0,1]."
+  },
+  "training": {
+    "epochs": 2,
+    "batch_size": 128,
+    "learning_rate": 0.001,
+    "optimizer": "Adam",
+    "loss": "sparse_categorical_crossentropy",
+    "duration_seconds": 40.83185719999983
+  },
+  "history": {
+    "loss": [
+      2.3026366233825684,
+      2.2950782775878906
+    ],
+    "val_loss": [
+      2.3266823291778564,
+      2.5037152767181396
+    ],
+    "accuracy": [
+      0.10777777433395386,
+      0.13777777552604675
+    ],
+    "val_accuracy": [
+      0.10000000149011612,
+      0.10000000149011612
+    ]
+  },
+  "test_metrics": {
+    "accuracy": 0.1023000031709671,
+    "loss": 2.445981740951538
+  }
+}

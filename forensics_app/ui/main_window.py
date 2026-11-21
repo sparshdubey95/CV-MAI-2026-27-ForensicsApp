@@ -255,7 +255,7 @@ class MainWindow:
         if result is None:
             self.status.set(f"Cancelled {tool.title}.")
             return
-        if result.image is not None:
+        if result.image is not None and tool.modifies_image:
             self.document.apply(result.image)
         self._show_details(result.details)
         self.status.set(result.message)
@@ -282,7 +282,11 @@ class MainWindow:
     def _require_image(self) -> bool:
         if self.document.is_loaded:
             return True
-        messagebox.showinfo("No image loaded", "Open an image first.", parent=self.root)
+        messagebox.showwarning(
+            "No Image Loaded",
+            "Please open an image first (File -> Open).",
+            parent=self.root,
+        )
         return False
 
     def _refresh(self) -> None:

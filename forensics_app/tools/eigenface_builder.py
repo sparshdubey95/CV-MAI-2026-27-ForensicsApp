@@ -446,6 +446,7 @@ class EigenfaceBuilderTool(ForensicsTool):
     category = "Set 6: Face Detection & Recognition"
     description = "Compute PCA mean face, eigenfaces and coefficients from face dataset and save model."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         if parent is not None:

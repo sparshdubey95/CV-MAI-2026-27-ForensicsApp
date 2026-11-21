@@ -51,6 +51,7 @@ class YOLOInferenceTool(ForensicsTool):
     category = "Set 9: Object Detection with YOLO"
     description = "Run pretrained Ultralytics YOLO model (yolo11n.pt) with customizable tab20 colormap plotting."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         if not ULTRALYTICS_AVAILABLE:
@@ -143,6 +144,7 @@ class YOLODataConversionTool(ForensicsTool):
     category = "Set 9: Object Detection with YOLO"
     description = "Convert COCO JSON annotations into normalized YOLO text files (images & labels)."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         coco_dir, yolo_dir = find_blood_cell_dataset()
@@ -221,6 +223,7 @@ class YOLOTrainingTool(ForensicsTool):
     category = "Set 9: Object Detection with YOLO"
     description = "Train YOLO model on custom dataset (data.yaml, epochs=50, batch=16, from_scratch_50e_v1)."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         if not ULTRALYTICS_AVAILABLE:
@@ -364,6 +367,7 @@ class YOLOComparisonTool(ForensicsTool):
     category = "Set 9: Object Detection with YOLO"
     description = "Test trained YOLO model on unseen images and visualize Ground Truth vs Predictions (RBC/WBC/PC)."
     requires_image = False
+    modifies_image = False
 
     def run(self, parent: tk.Misc | None, document: ImageDocument) -> ToolResult | None:
         if not ULTRALYTICS_AVAILABLE:
