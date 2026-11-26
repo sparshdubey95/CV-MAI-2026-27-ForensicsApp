@@ -19,3 +19,17 @@ runs/
 yolo_format_output/
 blood_cell.v1i.yolov11/
 blood cell.v1i.yolov11/
+
+# CIFAR-10 trained weights and model backups
+forensics_app/data/
+forensics_app/data/cifar-10-batches-py/
+forensics_app/data/cifar10/channels4_profile_result*.png
+forensics_app/data/cifar10/cifar10_cnn_passport.json*
+forensics_app/data/cifar10/cifar10_features_test500.npz
+forensics_app/face_detection_yunet_2023mar.onnx
+lab10/
+
+# CNN weights and samples
+forensics_app/data/cifar10/*.weights.h5*
+forensics_app/data/cifar10/samples/
+forensics_app/data/cifar10/user_runs/

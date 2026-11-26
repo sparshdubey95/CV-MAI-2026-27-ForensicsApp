@@ -1369,3 +1369,1245 @@ def ask_yolo_comparison_parameters(
 
 
 
+
+
+# ── Set 8: Image Classification using CNN Dialogs ──────────────────────────────
+
+def ask_cnn_weights_file(
+    parent: tk.Misc | None,
+    title: str = "Select CNN Model Weights (.weights.h5 / .h5 / .keras)",
+) -> str | None:
+    """Ask user to select a CNN weights or model file."""
+    filename = filedialog.askopenfilename(
+        parent=parent,
+        title=title,
+        filetypes=[
+            ("Keras Model/Weights", "*.weights.h5 *.h5 *.keras"),
+            ("All files", "*.*"),
+        ],
+    )
+    return filename or None
+
+
+def ask_cnn_passport_file(
+    parent: tk.Misc | None,
+    title: str = "Select Model Passport (.json)",
+) -> str | None:
+    """Ask user to select a model passport JSON file."""
+    filename = filedialog.askopenfilename(
+        parent=parent,
+        title=title,
+        filetypes=[
+            ("JSON Passport", "*.json"),
+            ("All files", "*.*"),
+        ],
+    )
+    return filename or None
+
+
+def ask_cnn_features_file(
+    parent: tk.Misc | None,
+    title: str = "Select Extracted Features (.npz)",
+) -> str | None:
+    """Ask user to select a saved feature vectors NPZ file."""
+    filename = filedialog.askopenfilename(
+        parent=parent,
+        title=title,
+        filetypes=[
+            ("NumPy Archive", "*.npz"),
+            ("All files", "*.*"),
+        ],
+    )
+    return filename or None
+
+
+def ask_cnn_training_parameters(
+    parent: tk.Misc | None,
+    default_arch: str = "shallow",
+    default_samples: int = 2000,
+    default_epochs: int = 5,
+    default_batch: int = 32,
+    default_weights: str | None = None,
+    default_passport: str | None = None,
+    default_dataset: str | None = None,
+    default_seed: int = 42,
+    default_lr: float | None = None,
+) -> dict[str, Any] | None:
+    """Configuration dialog for Set 8.1: Train Classification Model and Save Passport."""
+    default_learning_rate = 0.01 if default_lr is None else default_lr
+    if parent is None:
+        return {
+            "architecture": default_arch,
+            "sample_size": default_samples,
+            "epochs": default_epochs,
+            "batch_size": default_batch,
+            "optimizer": "sgd",
+            "learning_rate": default_learning_rate,
+            "weights_path": default_weights,
+            "passport_path": default_passport,
+            "dataset_dir": default_dataset,
+            "random_seed": default_seed,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 8.1: Train Classification Model")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Train CNN on CIFAR-10 and Save Model Passport",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    # Architecture
+    ttk.Label(frame, text="CNN Architecture:").grid(row=1, column=0, sticky="w", pady=4)
+    arch_var = tk.StringVar(value=default_arch)
+    arch_combo = ttk.Combobox(
+        frame,
+        textvariable=arch_var,
+        values=["shallow", "vgg", "transfer"],
+        state="readonly",
+        width=20,
+    )
+    arch_combo.grid(row=1, column=1, sticky="w", padx=6, pady=4)
+
+    # Sample size
+    ttk.Label(frame, text="Training Samples:").grid(row=2, column=0, sticky="w", pady=4)
+    samples_var = tk.IntVar(value=default_samples)
+    samples_entry = ttk.Entry(frame, textvariable=samples_var, width=12)
+    samples_entry.grid(row=2, column=1, sticky="w", padx=6, pady=4)
+    ttk.Label(frame, text="(e.g. 1000-50000)", font=("TkDefaultFont", 8), foreground="#666666").grid(row=2, column=2, sticky="w")
+
+    # Epochs
+    ttk.Label(frame, text="Epochs:").grid(row=3, column=0, sticky="w", pady=4)
+    epochs_var = tk.IntVar(value=default_epochs)
+    epochs_entry = ttk.Entry(frame, textvariable=epochs_var, width=12)
+    epochs_entry.grid(row=3, column=1, sticky="w", padx=6, pady=4)
+
+    # Batch size
+    ttk.Label(frame, text="Batch Size:").grid(row=4, column=0, sticky="w", pady=4)
+    batch_var = tk.IntVar(value=default_batch)
+    batch_entry = ttk.Entry(frame, textvariable=batch_var, width=12)
+    batch_entry.grid(row=4, column=1, sticky="w", padx=6, pady=4)
+
+    # Optimizer
+    ttk.Label(frame, text="Optimizer:").grid(row=5, column=0, sticky="w", pady=4)
+    opt_var = tk.StringVar(value="sgd")
+    opt_combo = ttk.Combobox(frame, textvariable=opt_var, values=["sgd", "adam"], state="readonly", width=12)
+    opt_combo.grid(row=5, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="Learning Rate (Adam: 0.001, SGD: 0.01):").grid(row=6, column=0, sticky="w", pady=4)
+    lr_var = tk.DoubleVar(value=default_learning_rate)
+    ttk.Entry(frame, textvariable=lr_var, width=12).grid(row=6, column=1, sticky="w", padx=6, pady=4)
+    if default_lr is None:
+        def update_default_learning_rate(*_args: Any) -> None:
+            lr_var.set(0.001 if opt_var.get().lower() == "adam" else 0.01)
+
+        opt_var.trace_add("write", update_default_learning_rate)
+
+    ttk.Label(frame, text="Random Seed:").grid(row=7, column=0, sticky="w", pady=4)
+    seed_var = tk.IntVar(value=default_seed)
+    ttk.Entry(frame, textvariable=seed_var, width=12).grid(row=7, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="CIFAR-10 Folder:").grid(row=8, column=0, sticky="w", pady=4)
+    ds_var = tk.StringVar(value=default_dataset or "")
+    ttk.Entry(frame, textvariable=ds_var, width=28).grid(row=8, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_ds() -> None:
+        p = filedialog.askdirectory(parent=window, title="Select cifar-10-batches-py folder")
+        if p:
+            ds_var.set(p)
+
+    ttk.Button(frame, text="Browse...", command=_browse_ds).grid(row=8, column=2, padx=4, pady=4)
+
+    # Weights save path
+    ttk.Label(frame, text="Save Weights To:").grid(row=9, column=0, sticky="w", pady=4)
+    w_var = tk.StringVar(value=default_weights or "")
+    w_entry = ttk.Entry(frame, textvariable=w_var, width=28)
+    w_entry.grid(row=9, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_w() -> None:
+        p = filedialog.asksaveasfilename(
+            parent=window,
+            title="Save Weights As",
+            defaultextension=".weights.h5",
+            filetypes=[("Keras Weights", "*.weights.h5 *.h5 *.keras"), ("All files", "*.*")],
+        )
+        if p:
+            w_var.set(p)
+
+    ttk.Button(frame, text="Browse...", command=_browse_w).grid(row=9, column=2, padx=4, pady=4)
+
+    # Passport save path
+    ttk.Label(frame, text="Save Passport To:").grid(row=10, column=0, sticky="w", pady=4)
+    p_var = tk.StringVar(value=default_passport or "")
+    p_entry = ttk.Entry(frame, textvariable=p_var, width=28)
+    p_entry.grid(row=10, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_p() -> None:
+        p = filedialog.asksaveasfilename(
+            parent=window,
+            title="Save Passport As",
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json"), ("All files", "*.*")],
+        )
+        if p:
+            p_var.set(p)
+
+    ttk.Button(frame, text="Browse...", command=_browse_p).grid(row=10, column=2, padx=4, pady=4)
+    ttk.Label(
+        frame,
+        text="Default save paths use cifar10/user_runs/ so the bundled demonstration model is not overwritten.",
+        font=("TkDefaultFont", 8),
+        foreground="#666666",
+        wraplength=420,
+    ).grid(row=11, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=12, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+    def on_ok() -> None:
+        try:
+            sample_size = int(samples_var.get())
+            epochs = int(epochs_var.get())
+            batch_size = int(batch_var.get())
+            seed = int(seed_var.get())
+            lr = float(lr_var.get())
+        except (tk.TclError, ValueError):
+            messagebox.showerror("Invalid Parameters", "Sample size, epochs, batch size, seed and learning rate must be numbers.", parent=window)
+            return
+        if sample_size < 20 or epochs < 1 or batch_size < 1:
+            messagebox.showerror(
+                "Invalid Parameters",
+                "Use at least 20 training samples, 1 epoch, and a positive batch size so all 10 classes can appear in train and validation.",
+                parent=window,
+            )
+            return
+        dialog_result["value"] = {
+            "architecture": arch_var.get(),
+            "sample_size": sample_size,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "optimizer": opt_var.get(),
+            "learning_rate": lr,
+            "weights_path": w_var.get().strip() or None,
+            "passport_path": p_var.get().strip() or None,
+            "dataset_dir": ds_var.get().strip() or None,
+            "random_seed": seed,
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Train Model", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+def ask_cnn_inference_parameters(
+    parent: tk.Misc | None,
+    current_image_loaded: bool = True,
+    default_weights: str | None = None,
+    default_passport: str | None = None,
+    sample_images: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Configuration dialog for Set 8.2: Load Pretrained Model and Perform Inference."""
+    if parent is None:
+        return {
+            "weights_path": default_weights,
+            "passport_path": default_passport,
+            "use_current_image": current_image_loaded,
+            "custom_image_path": None,
+            "show_passport": True,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 8.2: Load Model and Classify Image")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Load Pretrained Model and Passport for Inference",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    # Weights path
+    ttk.Label(frame, text="Model Weights:").grid(row=1, column=0, sticky="w", pady=4)
+    w_var = tk.StringVar(value=default_weights or "")
+    w_entry = ttk.Entry(frame, textvariable=w_var, width=30)
+    w_entry.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_w() -> None:
+        p = ask_cnn_weights_file(window)
+        if p:
+            w_var.set(p)
+
+    ttk.Button(frame, text="Browse...", command=_browse_w).grid(row=1, column=2, padx=4, pady=4)
+
+    # Passport path
+    ttk.Label(frame, text="Model Passport:").grid(row=2, column=0, sticky="w", pady=4)
+    p_var = tk.StringVar(value=default_passport or "")
+    p_entry = ttk.Entry(frame, textvariable=p_var, width=30)
+    p_entry.grid(row=2, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_p() -> None:
+        p = ask_cnn_passport_file(window)
+        if p:
+            p_var.set(p)
+
+    ttk.Button(frame, text="Browse...", command=_browse_p).grid(row=2, column=2, padx=4, pady=4)
+
+    # Image source
+    ttk.Label(frame, text="Image Source:").grid(row=3, column=0, sticky="w", pady=4)
+    src_var = tk.StringVar(value="current" if current_image_loaded else "browse")
+    src_frame = ttk.Frame(frame)
+    src_frame.grid(row=3, column=1, columnspan=2, sticky="w", padx=6, pady=4)
+
+    if current_image_loaded:
+        ttk.Radiobutton(src_frame, text="Current loaded image", variable=src_var, value="current").pack(anchor="w")
+    ttk.Radiobutton(src_frame, text="Select image file from disk", variable=src_var, value="browse").pack(anchor="w")
+
+    # Custom image selection
+    img_var = tk.StringVar()
+    img_frame = ttk.Frame(frame)
+    img_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=4)
+    ttk.Label(img_frame, text="Custom image:").pack(side="left")
+    img_entry = ttk.Entry(img_frame, textvariable=img_var, width=28)
+    img_entry.pack(side="left", padx=6, fill="x", expand=True)
+
+    def _browse_img() -> None:
+        p = ask_image_file(window, title="Select Test Image for CNN Classification")
+        if p:
+            img_var.set(p)
+            src_var.set("browse")
+
+    ttk.Button(img_frame, text="Browse...", command=_browse_img).pack(side="left")
+
+    # Sample images quick selector
+    samples = sample_images or []
+    if samples:
+        sample_frame = ttk.Frame(frame)
+        sample_frame.grid(row=5, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Label(sample_frame, text="Or quick pick CIFAR sample:", font=("TkDefaultFont", 8, "italic")).pack(side="left")
+        sample_var = tk.StringVar(value="")
+        sample_names = [os.path.basename(s) for s in samples]
+
+        def _on_pick_sample(event=None):
+            sel = sample_var.get()
+            for s in samples:
+                if os.path.basename(s) == sel:
+                    img_var.set(s)
+                    src_var.set("browse")
+                    break
+
+        sample_cb = ttk.Combobox(sample_frame, textvariable=sample_var, values=sample_names, state="readonly", width=18)
+        sample_cb.pack(side="left", padx=6)
+        sample_cb.bind("<<ComboboxSelected>>", _on_pick_sample)
+
+    # Show passport popup checkbox
+    show_p_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(frame, text="Display model passport details dialog", variable=show_p_var).grid(
+        row=6, column=0, columnspan=3, sticky="w", pady=(8, 4)
+    )
+    ttk.Label(
+        frame,
+        text="CIFAR-10 models expect 32×32 images. Photographs are resized to that size and may be classified poorly.",
+        font=("TkDefaultFont", 8),
+        foreground="#666666",
+        wraplength=440,
+    ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(0, 4))
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=8, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+    def on_ok() -> None:
+        use_current = src_var.get() == "current"
+        custom_path = img_var.get().strip() or None
+        if use_current and not current_image_loaded:
+            messagebox.showerror("Image Required", "Load an image in the main window or browse to a file.", parent=window)
+            return
+        if not use_current and not custom_path:
+            messagebox.showerror(
+                "Image Required",
+                "Select an image to classify. A random or bundled sample will not be used automatically.",
+                parent=window,
+            )
+            return
+        if not w_var.get().strip() or not p_var.get().strip():
+            messagebox.showerror("Model Required", "Select both a weights file and its matching passport JSON.", parent=window)
+            return
+        dialog_result["value"] = {
+            "weights_path": w_var.get().strip() or None,
+            "passport_path": p_var.get().strip() or None,
+            "use_current_image": use_current,
+            "custom_image_path": custom_path,
+            "show_passport": show_p_var.get(),
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Load and Classify", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+def ask_cnn_projection_parameters(
+    parent: tk.Misc | None,
+    default_features_path: str | None = None,
+    default_samples_per_class: int = 50,
+    default_perplexity: float = 40.0,
+    default_weights: str | None = None,
+    default_passport: str | None = None,
+    umap_available: bool = True,
+) -> dict[str, Any] | None:
+    """Configuration dialog for Set 8.3: Feature Projection (t-SNE and UMAP)."""
+    if parent is None:
+        return {
+            "action": "load" if default_features_path and os.path.isfile(default_features_path) else "extract",
+            "features_path": default_features_path,
+            "samples_per_class": default_samples_per_class,
+            "perplexity": default_perplexity,
+            "umap_neighbors": 15,
+            "method": "both" if umap_available else "tsne",
+            "weights_path": default_weights,
+            "passport_path": default_passport,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 8.3: Feature Projection (t-SNE and UMAP)")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Feature Vector Extraction and 2D Projection (t-SNE / UMAP)",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    # Action choice
+    has_file = bool(default_features_path and os.path.isfile(default_features_path))
+    act_var = tk.StringVar(value="load" if has_file else "extract")
+
+    act_frame = ttk.LabelFrame(frame, text="Features Source", padding=8)
+    act_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=4)
+
+    ttk.Radiobutton(act_frame, text="Load pre-extracted features file (.npz)", variable=act_var, value="load").pack(anchor="w")
+    ttk.Radiobutton(act_frame, text="Extract fresh features from CIFAR-10 test set", variable=act_var, value="extract").pack(anchor="w")
+
+    # Features file
+    file_frame = ttk.Frame(frame)
+    file_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=4)
+    ttk.Label(file_frame, text="Features file:").pack(side="left")
+    feat_var = tk.StringVar(value=default_features_path or "")
+    feat_entry = ttk.Entry(file_frame, textvariable=feat_var, width=28)
+    feat_entry.pack(side="left", padx=6, fill="x", expand=True)
+
+    def _browse_f() -> None:
+        p = ask_cnn_features_file(window)
+        if p:
+            feat_var.set(p)
+            act_var.set("load")
+
+    ttk.Button(file_frame, text="Browse...", command=_browse_f).pack(side="left")
+
+    ttk.Label(frame, text="CNN Weights:").grid(row=3, column=0, sticky="w", pady=4)
+    w_var = tk.StringVar(value=default_weights or "")
+    ttk.Entry(frame, textvariable=w_var, width=28).grid(row=3, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_w() -> None:
+        p = ask_cnn_weights_file(window)
+        if p:
+            w_var.set(p)
+            act_var.set("extract")
+
+    ttk.Button(frame, text="Browse...", command=_browse_w).grid(row=3, column=2, padx=4, pady=4)
+
+    ttk.Label(frame, text="Model Passport:").grid(row=4, column=0, sticky="w", pady=4)
+    p_var = tk.StringVar(value=default_passport or "")
+    ttk.Entry(frame, textvariable=p_var, width=28).grid(row=4, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_p() -> None:
+        p = ask_cnn_passport_file(window)
+        if p:
+            p_var.set(p)
+
+    ttk.Button(frame, text="Browse...", command=_browse_p).grid(row=4, column=2, padx=4, pady=4)
+
+    # Parameters
+    ttk.Label(frame, text="Samples per class:").grid(row=5, column=0, sticky="w", pady=4)
+    samples_var = tk.IntVar(value=default_samples_per_class)
+    ttk.Entry(frame, textvariable=samples_var, width=12).grid(row=5, column=1, sticky="w", padx=6, pady=4)
+    ttk.Label(frame, text="(e.g. 50 per class = 500 total)", font=("TkDefaultFont", 8), foreground="#666666").grid(row=5, column=2, sticky="w")
+
+    ttk.Label(frame, text="t-SNE Perplexity:").grid(row=6, column=0, sticky="w", pady=4)
+    perp_var = tk.DoubleVar(value=default_perplexity)
+    ttk.Entry(frame, textvariable=perp_var, width=12).grid(row=6, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="UMAP Neighbors:").grid(row=7, column=0, sticky="w", pady=4)
+    umap_var = tk.IntVar(value=15)
+    ttk.Entry(frame, textvariable=umap_var, width=12).grid(row=7, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="Projection Methods:").grid(row=8, column=0, sticky="w", pady=4)
+    method_var = tk.StringVar(value="both" if umap_available else "tsne")
+    method_values = ["both", "tsne", "umap"] if umap_available else ["tsne"]
+    method_combo = ttk.Combobox(frame, textvariable=method_var, values=method_values, state="readonly", width=12)
+    method_combo.grid(row=8, column=1, sticky="w", padx=6, pady=4)
+    umap_note = (
+        "UMAP is available."
+        if umap_available
+        else "UMAP is unavailable (install umap-learn). t-SNE can still be used."
+    )
+    ttk.Label(frame, text=umap_note, font=("TkDefaultFont", 8), foreground="#666666", wraplength=280).grid(
+        row=8, column=2, sticky="w"
+    )
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=9, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+    def on_ok() -> None:
+        dialog_result["value"] = {
+            "action": act_var.get(),
+            "features_path": feat_var.get().strip() or None,
+            "samples_per_class": max(5, int(samples_var.get())),
+            "perplexity": float(perp_var.get()),
+            "umap_neighbors": max(2, int(umap_var.get())),
+            "method": method_var.get(),
+            "weights_path": w_var.get().strip() or None,
+            "passport_path": p_var.get().strip() or None,
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Run Projections", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+def show_cnn_passport_dialog(
+    parent: tk.Misc | None,
+    passport: dict[str, Any],
+) -> None:
+    """Display structured model passport in a dialog window matching Set 8.2."""
+    if parent is None:
+        return
+
+    window = tk.Toplevel(parent)
+    window.title(f"Model Passport: {passport.get('model_name', 'CNN Model')}")
+    window.transient(parent)
+    window.geometry("600x520")
+    window.resizable(True, True)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Model Passport",
+        font=("TkDefaultFont", 13, "bold"),
+        foreground="#0055aa",
+    ).pack(anchor="w", pady=(0, 8))
+
+    txt = tk.Text(frame, wrap="word", font=("Consolas", 9), padx=8, pady=8, background="#f8f9fa")
+    txt.pack(fill="both", expand=True)
+
+    # Format passport sections
+    p_text = []
+    p_text.append("=" * 64)
+    p_text.append(f" MODEL NAME: {passport.get('model_name', 'N/A')}")
+    p_text.append(f" CREATED AT: {passport.get('created_at', 'N/A')}")
+    p_text.append(f" WEIGHTS:    {passport.get('weights_path', 'N/A')}")
+    p_text.append("=" * 64)
+    p_text.append("")
+    p_text.append("[1] DATASET & SAMPLES:")
+    p_text.append(f"  * Dataset Name: {passport.get('dataset', 'CIFAR-10')}")
+    p_text.append(f"  * Dataset Source: {passport.get('dataset_source', 'N/A')}")
+    p_text.append(f"  * Provenance: {passport.get('dataset_provenance', 'N/A')}")
+    p_text.append(f"  * Sample Size:  {passport.get('sample_size', 'N/A')} samples")
+    p_text.append(f"  * Train / Val / Test: {passport.get('train_samples', 'N/A')} / {passport.get('val_samples', 'N/A')} / {passport.get('test_samples', 'N/A')}")
+    p_text.append(f"  * Random Seed: {passport.get('random_seed', 'N/A')}")
+    p_text.append("")
+    p_text.append("[2] CLASS NAMES (10 classes):")
+    classes = passport.get("class_names", [])
+    for idx, cname in enumerate(classes):
+        p_text.append(f"  * Class {idx}: {cname}")
+    p_text.append("")
+    p_text.append("[3] PREPROCESSING INSTRUCTIONS:")
+    prep = passport.get("preprocessing_instructions", {})
+    for k, v in prep.items():
+        p_text.append(f"  * {k}: {v}")
+    p_text.append("")
+    p_text.append("[4] ARCHITECTURE SUMMARY:")
+    arch = passport.get("architecture", {})
+    for k, v in arch.items():
+        p_text.append(f"  * {k}: {v}")
+    p_text.append("")
+    p_text.append("[5] TRAINING SETUP:")
+    p_text.append(f"  * Optimizer: {passport.get('optimizer', 'N/A')}")
+    p_text.append(f"  * Learning Rate: {passport.get('learning_rate', 'N/A')}")
+    p_text.append(f"  * Batch Size: {passport.get('batch_size', 'N/A')}")
+    p_text.append(f"  * Epochs: {passport.get('epochs', 'N/A')}")
+    p_text.append(f"  * Weights Filename: {passport.get('weights_filename', Path(str(passport.get('weights_path', ''))).name)}")
+    p_text.append(f"  * Pretrained Base Weights: {passport.get('pretrained_base_weights', 'none')}")
+    p_text.append("")
+    p_text.append("[6] TRAINING HISTORY & METRICS:")
+    metrics = passport.get("metrics", {})
+    for k, v in metrics.items():
+        if isinstance(v, float):
+            p_text.append(f"  * {k}: {v:.4f}")
+        else:
+            p_text.append(f"  * {k}: {v}")
+
+    history = passport.get("training_history", {})
+    if "accuracy" in history and history["accuracy"]:
+        p_text.append(f"  * Epochs Trained: {len(history['accuracy'])}")
+        p_text.append(f"  * Initial Loss:   {history.get('loss', [0])[0]:.4f} -> Final Loss: {history.get('loss', [0])[-1]:.4f}")
+        p_text.append(f"  * Initial Acc:    {history.get('accuracy', [0])[0] * 100:.2f}% -> Final Acc: {history.get('accuracy', [0])[-1] * 100:.2f}%")
+        if "val_accuracy" in history and history["val_accuracy"]:
+            p_text.append(f"  * Final Val Acc:  {history['val_accuracy'][-1] * 100:.2f}%")
+
+    txt.insert("1.0", "\n".join(p_text))
+    txt.configure(state="disabled")
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.pack(fill="x", pady=(10, 0))
+    ttk.Button(btn_frame, text="Close", command=window.destroy).pack(side="right")
+
+
+# ============================================================================
+# Set 10: CLIP Zero-Shot Classification Dialog
+# ============================================================================
+
+
+def ask_clip_zero_shot_parameters(
+    parent: tk.Misc | None,
+    current_image_loaded: bool = False,
+    default_model: str = "openai/clip-vit-base-patch32",
+    default_template: str = "a photo of a {}.",
+) -> dict[str, Any] | None:
+    """Prompt for image source, CLIP model, prompt template, and arbitrary class/prompt pairs."""
+    starter_classes: list[tuple[str, str]] = [
+        ("cat", ""),
+        ("dog", ""),
+        ("coffee", ""),
+        ("car", ""),
+    ]
+    if parent is None:
+        return {
+            "use_current_image": current_image_loaded,
+            "custom_image_path": None,
+            "model_name": default_model,
+            "template": default_template,
+            "classes": starter_classes,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 10: CLIP Zero-Shot Classification")
+    window.transient(parent)
+    window.resizable(True, True)
+    window.minsize(560, 520)
+
+    frame = ttk.Frame(window, padding=14)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="CLIP Zero-Shot Image Classification",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).pack(anchor="w", pady=(0, 8))
+
+    # Image source
+    img_frame = ttk.LabelFrame(frame, text="Image Input", padding=8)
+    img_frame.pack(fill="x", pady=(0, 8))
+
+    source_var = tk.StringVar(value="current" if current_image_loaded else "file")
+    rb_current = ttk.Radiobutton(
+        img_frame,
+        text="Use currently loaded image",
+        variable=source_var,
+        value="current",
+        state="normal" if current_image_loaded else "disabled",
+    )
+    rb_current.pack(anchor="w")
+
+    file_row = ttk.Frame(img_frame)
+    file_row.pack(fill="x", pady=(4, 0))
+    ttk.Radiobutton(
+        file_row,
+        text="Select image file:",
+        variable=source_var,
+        value="file",
+    ).pack(side="left")
+    img_path_var = tk.StringVar(value="")
+    ttk.Entry(file_row, textvariable=img_path_var, width=36).pack(
+        side="left", padx=6, fill="x", expand=True
+    )
+
+    def _browse_img() -> None:
+        chosen = ask_image_file(window, title="Select image for CLIP classification")
+        if chosen:
+            img_path_var.set(chosen)
+            source_var.set("file")
+
+    ttk.Button(file_row, text="Browse...", command=_browse_img).pack(side="left")
+
+    # Model & template
+    model_frame = ttk.LabelFrame(frame, text="CLIP Model & Prompt Template", padding=8)
+    model_frame.pack(fill="x", pady=(0, 8))
+    model_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(model_frame, text="Model ID:").grid(row=0, column=0, sticky="w", pady=2)
+    model_var = tk.StringVar(value=default_model)
+    model_combo = ttk.Combobox(
+        model_frame,
+        textvariable=model_var,
+        values=["openai/clip-vit-base-patch32", "openai/clip-vit-large-patch14"],
+    )
+    model_combo.grid(row=0, column=1, sticky="ew", padx=(6, 0), pady=2)
+
+    ttk.Label(model_frame, text="Default template:").grid(row=1, column=0, sticky="w", pady=2)
+    tmpl_var = tk.StringVar(value=default_template)
+    ttk.Entry(model_frame, textvariable=tmpl_var).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=2)
+    ttk.Label(
+        model_frame,
+        text="Used when a class has no custom text (e.g. 'a photo of a {}.').",
+        font=("TkDefaultFont", 8),
+        foreground="#555555",
+    ).grid(row=2, column=1, sticky="w", padx=(6, 0))
+
+    # Candidate classes table
+    cls_frame = ttk.LabelFrame(frame, text="Candidate Classes & Optional Custom Text", padding=8)
+    cls_frame.pack(fill="both", expand=True, pady=(0, 8))
+
+    tree_wrap = ttk.Frame(cls_frame)
+    tree_wrap.pack(fill="both", expand=True)
+    tree = ttk.Treeview(
+        tree_wrap,
+        columns=("label", "prompt"),
+        show="headings",
+        height=6,
+        selectmode="browse",
+    )
+    tree.heading("label", text="Class Label")
+    tree.heading("prompt", text="Custom Prompt (blank = use template)")
+    tree.column("label", width=160, stretch=True)
+    tree.column("prompt", width=320, stretch=True)
+    tree_scroll = ttk.Scrollbar(tree_wrap, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=tree_scroll.set)
+    tree.pack(side="left", fill="both", expand=True)
+    tree_scroll.pack(side="right", fill="y")
+
+    for lbl, prm in starter_classes:
+        tree.insert("", "end", values=(lbl, prm))
+
+    edit_row = ttk.Frame(cls_frame)
+    edit_row.pack(fill="x", pady=(8, 4))
+    ttk.Label(edit_row, text="Label:").pack(side="left")
+    lbl_var = tk.StringVar()
+    ttk.Entry(edit_row, textvariable=lbl_var, width=16).pack(side="left", padx=(4, 10))
+    ttk.Label(edit_row, text="Custom text:").pack(side="left")
+    prm_var = tk.StringVar()
+    ttk.Entry(edit_row, textvariable=prm_var, width=28).pack(side="left", padx=4, fill="x", expand=True)
+
+    def _on_select(_event: Any = None) -> None:
+        sel = tree.selection()
+        if not sel:
+            return
+        vals = tree.item(sel[0], "values")
+        if len(vals) >= 2:
+            lbl_var.set(vals[0])
+            prm_var.set(vals[1])
+
+    tree.bind("<<TreeviewSelect>>", _on_select)
+
+    def _add_class() -> None:
+        lbl = lbl_var.get().strip()
+        prm = prm_var.get()
+        if not lbl:
+            messagebox.showerror("Empty Label", "Please enter a non-empty class label.", parent=window)
+            return
+        if prm != "" and not prm.strip():
+            messagebox.showerror(
+                "Blank Custom Prompt",
+                "Custom prompt contains only whitespace. Leave it empty to use the template or enter text.",
+                parent=window,
+            )
+            return
+        existing = {str(tree.item(iid, "values")[0]).strip().casefold() for iid in tree.get_children()}
+        if lbl.casefold() in existing:
+            messagebox.showerror("Duplicate Label", f"Class label '{lbl}' is already in the list.", parent=window)
+            return
+        tree.insert("", "end", values=(lbl, prm.strip() if prm else ""))
+        lbl_var.set("")
+        prm_var.set("")
+
+    def _update_selected() -> None:
+        sel = tree.selection()
+        if not sel:
+            messagebox.showinfo("No Selection", "Select a class row to update.", parent=window)
+            return
+        lbl = lbl_var.get().strip()
+        prm = prm_var.get()
+        if not lbl:
+            messagebox.showerror("Empty Label", "Class label cannot be empty.", parent=window)
+            return
+        if prm != "" and not prm.strip():
+            messagebox.showerror(
+                "Blank Custom Prompt",
+                "Custom prompt contains only whitespace. Leave it empty to use the template or enter text.",
+                parent=window,
+            )
+            return
+        for iid in tree.get_children():
+            if iid != sel[0] and str(tree.item(iid, "values")[0]).strip().casefold() == lbl.casefold():
+                messagebox.showerror("Duplicate Label", f"Class label '{lbl}' already exists.", parent=window)
+                return
+        tree.item(sel[0], values=(lbl, prm.strip() if prm else ""))
+
+    def _remove_selected() -> None:
+        for iid in tree.selection():
+            tree.delete(iid)
+
+    def _clear_all() -> None:
+        for iid in tree.get_children():
+            tree.delete(iid)
+
+    cls_btns = ttk.Frame(cls_frame)
+    cls_btns.pack(fill="x")
+    ttk.Button(cls_btns, text="Add", command=_add_class).pack(side="left")
+    ttk.Button(cls_btns, text="Update Selected", command=_update_selected).pack(side="left", padx=(6, 0))
+    ttk.Button(cls_btns, text="Remove Selected", command=_remove_selected).pack(side="left", padx=(6, 0))
+    ttk.Button(cls_btns, text="Clear All", command=_clear_all).pack(side="left", padx=(6, 0))
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.pack(fill="x", pady=(6, 0))
+
+    def on_ok() -> None:
+        use_current = source_var.get() == "current" and current_image_loaded
+        custom_path = img_path_var.get().strip() or None
+        if not use_current and not custom_path:
+            messagebox.showerror("Image Required", "Select an image file or load an image first.", parent=window)
+            return
+        if not model_var.get().strip():
+            messagebox.showerror("Model Required", "Enter a CLIP model ID.", parent=window)
+            return
+        if not tmpl_var.get().strip():
+            messagebox.showerror("Blank Template", "Default prompt template cannot be blank.", parent=window)
+            return
+
+        rows: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for iid in tree.get_children():
+            vals = tree.item(iid, "values")
+            lbl = str(vals[0]).strip() if len(vals) > 0 else ""
+            prm = str(vals[1]) if len(vals) > 1 else ""
+            if not lbl:
+                messagebox.showerror("Empty Label", "All class labels must be non-empty.", parent=window)
+                return
+            if lbl.casefold() in seen:
+                messagebox.showerror("Duplicate Label", f"Duplicate class label: '{lbl}'.", parent=window)
+                return
+            seen.add(lbl.casefold())
+            rows.append((lbl, prm.strip() if prm else ""))
+
+        if not rows:
+            messagebox.showerror("Classes Required", "Add at least one class label.", parent=window)
+            return
+
+        dialog_result["value"] = {
+            "use_current_image": use_current,
+            "custom_image_path": custom_path if not use_current else None,
+            "model_name": model_var.get().strip(),
+            "template": tmpl_var.get().strip(),
+            "classes": rows,
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Classify", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+# ============================================================================
+# Set 11: U-Net Segmentation Dialogs
+# ============================================================================
+
+
+def ask_unet_training_parameters(
+    parent: tk.Misc | None,
+    default_dataset_dir: str = "",
+    default_checkpoint_path: str = "",
+    default_epochs: int = 10,
+    default_batch_size: int = 16,
+    default_lr: float = 1e-3,
+    default_height: int = 128,
+    default_width: int = 208,
+) -> dict[str, Any] | None:
+    """Configuration dialog for Set 11.1: U-Net training on TrayDataset."""
+    if parent is None:
+        return {
+            "dataset_dir": default_dataset_dir,
+            "checkpoint_path": default_checkpoint_path,
+            "epochs": default_epochs,
+            "batch_size": default_batch_size,
+            "learning_rate": default_lr,
+            "val_fraction": 0.15,
+            "input_height": default_height,
+            "input_width": default_width,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 11: Train U-Net Food Segmentation")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="Train U-Net (Food vs. Not-Food on TrayDataset)",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    ttk.Label(frame, text="TrayDataset folder:").grid(row=1, column=0, sticky="w", pady=4)
+    ds_var = tk.StringVar(value=default_dataset_dir)
+    ttk.Entry(frame, textvariable=ds_var, width=36).grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_ds() -> None:
+        folder = ask_image_folder(window, title="Select TrayDataset folder")
+        if folder:
+            ds_var.set(folder)
+
+    ttk.Button(frame, text="Browse...", command=_browse_ds).grid(row=1, column=2, pady=4)
+
+    ttk.Label(frame, text="Save checkpoint to:").grid(row=2, column=0, sticky="w", pady=4)
+    ckpt_var = tk.StringVar(value=default_checkpoint_path)
+    ttk.Entry(frame, textvariable=ckpt_var, width=36).grid(row=2, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_ckpt() -> None:
+        chosen = filedialog.asksaveasfilename(
+            parent=window,
+            title="Save U-Net checkpoint",
+            defaultextension=".pt",
+            initialfile=Path(ckpt_var.get() or "unet_tray_food.pt").name,
+            filetypes=[("PyTorch checkpoint", "*.pt *.pth"), ("All files", "*.*")],
+        )
+        if chosen:
+            ckpt_var.set(chosen)
+
+    ttk.Button(frame, text="Browse...", command=_browse_ckpt).grid(row=2, column=2, pady=4)
+
+    ttk.Label(frame, text="Epochs:").grid(row=3, column=0, sticky="w", pady=4)
+    epochs_var = tk.IntVar(value=default_epochs)
+    ttk.Entry(frame, textvariable=epochs_var, width=12).grid(row=3, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="Batch size:").grid(row=4, column=0, sticky="w", pady=4)
+    batch_var = tk.IntVar(value=default_batch_size)
+    ttk.Entry(frame, textvariable=batch_var, width=12).grid(row=4, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="Learning rate:").grid(row=5, column=0, sticky="w", pady=4)
+    lr_var = tk.DoubleVar(value=default_lr)
+    ttk.Entry(frame, textvariable=lr_var, width=12).grid(row=5, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="Val split fraction:").grid(row=6, column=0, sticky="w", pady=4)
+    val_var = tk.DoubleVar(value=0.15)
+    ttk.Entry(frame, textvariable=val_var, width=12).grid(row=6, column=1, sticky="w", padx=6, pady=4)
+
+    ttk.Label(frame, text="Input size (H x W):").grid(row=7, column=0, sticky="w", pady=4)
+    size_row = ttk.Frame(frame)
+    size_row.grid(row=7, column=1, sticky="w", padx=6, pady=4)
+    h_var = tk.IntVar(value=default_height)
+    w_var = tk.IntVar(value=default_width)
+    ttk.Entry(size_row, textvariable=h_var, width=6).pack(side="left")
+    ttk.Label(size_row, text=" x ").pack(side="left")
+    ttk.Entry(size_row, textvariable=w_var, width=6).pack(side="left")
+    ttk.Label(frame, text="Divisible by 8", font=("TkDefaultFont", 8), foreground="#555555").grid(
+        row=7, column=2, sticky="w"
+    )
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=8, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+    def on_ok() -> None:
+        ds = ds_var.get().strip()
+        ckpt = ckpt_var.get().strip()
+        if not ds or not os.path.isdir(ds):
+            messagebox.showerror("Invalid Dataset", "Please select an existing TrayDataset directory.", parent=window)
+            return
+        if not ckpt:
+            messagebox.showerror("Checkpoint Required", "Please specify a checkpoint save path.", parent=window)
+            return
+        try:
+            ep = int(epochs_var.get())
+            bs = int(batch_var.get())
+            lr = float(lr_var.get())
+            vf = float(val_var.get())
+            ih = int(h_var.get())
+            iw = int(w_var.get())
+        except (TypeError, ValueError):
+            messagebox.showerror("Invalid Parameters", "Numeric training parameters must be valid numbers.", parent=window)
+            return
+
+        if ep < 1 or bs < 1 or lr <= 0:
+            messagebox.showerror("Invalid Parameters", "Epochs, batch size, and learning rate must be positive.", parent=window)
+            return
+        if not (0.0 < vf < 0.5):
+            messagebox.showerror("Invalid Split", "Validation split fraction must be between 0 and 0.5.", parent=window)
+            return
+        if ih < 16 or iw < 16 or ih % 8 != 0 or iw % 8 != 0:
+            messagebox.showerror("Invalid Size", "Input height and width must be >= 16 and divisible by 8.", parent=window)
+            return
+
+        dialog_result["value"] = {
+            "dataset_dir": ds,
+            "checkpoint_path": ckpt,
+            "epochs": ep,
+            "batch_size": bs,
+            "learning_rate": lr,
+            "val_fraction": vf,
+            "input_height": ih,
+            "input_width": iw,
+        }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Start Training", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
+
+
+def ask_unet_segmentation_parameters(
+    parent: tk.Misc | None,
+    current_image_loaded: bool = False,
+    default_checkpoint_path: str = "",
+    default_dataset_dir: str = "",
+    default_threshold: float = 0.5,
+) -> dict[str, Any] | None:
+    """Configuration dialog for Set 11.2: Load U-Net checkpoint and test/segment."""
+    if parent is None:
+        return {
+            "checkpoint_path": default_checkpoint_path,
+            "mode": "image",
+            "use_current_image": current_image_loaded,
+            "custom_image_path": None,
+            "gt_mask_path": None,
+            "dataset_dir": default_dataset_dir,
+            "threshold": default_threshold,
+        }
+
+    dialog_result: dict[str, Any] = {"value": None}
+    window = tk.Toplevel(parent)
+    window.title("Set 11: Load U-Net & Segment")
+    window.transient(parent)
+    window.resizable(False, False)
+
+    frame = ttk.Frame(window, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="U-Net Food Segmentation & Evaluation",
+        font=("TkDefaultFont", 11, "bold"),
+        foreground="#0055aa",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    ttk.Label(frame, text="Checkpoint (.pt):").grid(row=1, column=0, sticky="w", pady=4)
+    ckpt_var = tk.StringVar(value=default_checkpoint_path)
+    ttk.Entry(frame, textvariable=ckpt_var, width=36).grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+
+    def _browse_ckpt() -> None:
+        chosen = filedialog.askopenfilename(
+            parent=window,
+            title="Select U-Net checkpoint",
+            filetypes=[("PyTorch checkpoint", "*.pt *.pth"), ("All files", "*.*")],
+        )
+        if chosen:
+            ckpt_var.set(chosen)
+
+    ttk.Button(frame, text="Browse...", command=_browse_ckpt).grid(row=1, column=2, pady=4)
+
+    mode_var = tk.StringVar(value="image")
+    mode_frame = ttk.LabelFrame(frame, text="Target Input", padding=8)
+    mode_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=8)
+
+    ttk.Radiobutton(
+        mode_frame,
+        text="Segment a single image",
+        variable=mode_var,
+        value="image",
+    ).pack(anchor="w")
+
+    img_sub = ttk.Frame(mode_frame, padding=(16, 4, 0, 6))
+    img_sub.pack(fill="x")
+    img_src_var = tk.StringVar(value="current" if current_image_loaded else "file")
+    ttk.Radiobutton(
+        img_sub,
+        text="Use currently loaded image",
+        variable=img_src_var,
+        value="current",
+        state="normal" if current_image_loaded else "disabled",
+    ).pack(anchor="w")
+
+    file_row = ttk.Frame(img_sub)
+    file_row.pack(fill="x", pady=2)
+    ttk.Radiobutton(file_row, text="Image file:", variable=img_src_var, value="file").pack(side="left")
+    img_var = tk.StringVar(value="")
+    ttk.Entry(file_row, textvariable=img_var, width=28).pack(side="left", padx=6, fill="x", expand=True)
+
+    def _browse_img() -> None:
+        chosen = ask_image_file(window, title="Select image to segment")
+        if chosen:
+            img_var.set(chosen)
+            img_src_var.set("file")
+            mode_var.set("image")
+
+    ttk.Button(file_row, text="Browse...", command=_browse_img).pack(side="left")
+
+    gt_row = ttk.Frame(img_sub)
+    gt_row.pack(fill="x", pady=2)
+    ttk.Label(gt_row, text="Optional GT mask:").pack(side="left")
+    gt_var = tk.StringVar(value="")
+    ttk.Entry(gt_row, textvariable=gt_var, width=26).pack(side="left", padx=6, fill="x", expand=True)
+
+    def _browse_gt() -> None:
+        chosen = ask_image_file(window, title="Select ground-truth mask (optional)")
+        if chosen:
+            gt_var.set(chosen)
+
+    ttk.Button(gt_row, text="Browse...", command=_browse_gt).pack(side="left")
+
+    ttk.Radiobutton(
+        mode_frame,
+        text="Evaluate on TrayDataset test set (XTest / yTest)",
+        variable=mode_var,
+        value="test_set",
+    ).pack(anchor="w", pady=(6, 0))
+
+    ds_row = ttk.Frame(mode_frame, padding=(16, 4, 0, 0))
+    ds_row.pack(fill="x")
+    ttk.Label(ds_row, text="TrayDataset:").pack(side="left")
+    ds_var = tk.StringVar(value=default_dataset_dir)
+    ttk.Entry(ds_row, textvariable=ds_var, width=28).pack(side="left", padx=6, fill="x", expand=True)
+
+    def _browse_ds() -> None:
+        folder = ask_image_folder(window, title="Select TrayDataset folder")
+        if folder:
+            ds_var.set(folder)
+            mode_var.set("test_set")
+
+    ttk.Button(ds_row, text="Browse...", command=_browse_ds).pack(side="left")
+
+    ttk.Label(frame, text="Mask threshold:").grid(row=3, column=0, sticky="w", pady=4)
+    thr_var = tk.DoubleVar(value=default_threshold)
+    ttk.Entry(frame, textvariable=thr_var, width=10).grid(row=3, column=1, sticky="w", padx=6, pady=4)
+
+    btn_frame = ttk.Frame(frame)
+    btn_frame.grid(row=4, column=0, columnspan=3, sticky="e", pady=(12, 0))
+
+    def on_ok() -> None:
+        ckpt = ckpt_var.get().strip()
+        if not ckpt:
+            messagebox.showerror("Checkpoint Required", "Please select a U-Net checkpoint file.", parent=window)
+            return
+        try:
+            thr = float(thr_var.get())
+        except (TypeError, ValueError):
+            messagebox.showerror("Invalid Threshold", "Threshold must be a number between 0 and 1.", parent=window)
+            return
+        if not (0.0 < thr < 1.0):
+            messagebox.showerror("Invalid Threshold", "Threshold must be strictly between 0 and 1.", parent=window)
+            return
+
+        mode = mode_var.get()
+        if mode == "image":
+            use_cur = img_src_var.get() == "current" and current_image_loaded
+            custom_img = img_var.get().strip() or None
+            if not use_cur and not custom_img:
+                messagebox.showerror("Image Required", "Select an image file or load an image first.", parent=window)
+                return
+            dialog_result["value"] = {
+                "checkpoint_path": ckpt,
+                "mode": "image",
+                "use_current_image": use_cur,
+                "custom_image_path": custom_img if not use_cur else None,
+                "gt_mask_path": gt_var.get().strip() or None,
+                "dataset_dir": ds_var.get().strip(),
+                "threshold": thr,
+            }
+        else:
+            ds = ds_var.get().strip()
+            if not ds or not os.path.isdir(ds):
+                messagebox.showerror("Dataset Required", "Select an existing TrayDataset directory.", parent=window)
+                return
+            dialog_result["value"] = {
+                "checkpoint_path": ckpt,
+                "mode": "test_set",
+                "use_current_image": False,
+                "custom_image_path": None,
+                "gt_mask_path": None,
+                "dataset_dir": ds,
+                "threshold": thr,
+            }
+        window.destroy()
+
+    def on_cancel() -> None:
+        window.destroy()
+
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+    ttk.Button(btn_frame, text="Run Segmentation", command=on_ok).pack(side="right")
+
+    window.protocol("WM_DELETE_WINDOW", on_cancel)
+    window.grab_set()
+    window.wait_window()
+    return dialog_result["value"]
